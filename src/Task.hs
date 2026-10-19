@@ -1,16 +1,18 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Task (Task, discoverTask) where
+module Task (Task, discoverTask, taskNecessary) where
 
 import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
 import Data.List.Extra (firstJust)
 import Data.Maybe (mapMaybe)
+import System.Directory (getModificationTime)
+import System.Directory.Extra (doesFileExist)
 import System.FilePath (makeRelative, normalise, (</>))
 import Text.Read (readMaybe)
 import Text.Regex.TDFA
 
-import Action (Action)
+import Action (Action, deps)
 import Mapping (Mapping (..))
 
 type BasePath = FilePath
@@ -53,3 +55,13 @@ substitute groups = go
           Just n | inRange (bounds groups) n -> fst (groups ! n) ++ go rest
           _ -> '$' : go xs
   go (x : xs) = x : go xs
+
+taskNecessary :: Task -> IO Bool
+taskNecessary Task{..} = do
+  mtimes <- mapM getModificationTime (source : deps action)
+  targetExists <- doesFileExist target
+  if not targetExists
+    then return True
+    else do
+      targetMtime <- getModificationTime target
+      return $ any (> targetMtime) mtimes

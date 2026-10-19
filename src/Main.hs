@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RecordWildCards #-}
 
-import Control.Monad.Extra (whenM)
+import Control.Monad.Extra (filterM, whenM)
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import System.Console.CmdArgs
@@ -12,7 +12,8 @@ import System.IO (hPutStr, stderr)
 import Mapping
 import Task
 
-import Control.Monad (when)
+import Control.Monad (unless, when)
+import Data.Bool (bool)
 import Paths_adorn (version)
 import System.Directory.Extra (listFilesRecursive)
 
@@ -22,6 +23,7 @@ data Adorn = Adorn
   , out :: FilePath
   , base :: FilePath
   , layout :: FilePath
+  , full :: Bool
   }
   deriving (Show, Data, Typeable)
 
@@ -32,6 +34,7 @@ adorn =
     , out = "dist" &= help "Output dir" &= typDir
     , base = "." &= help "Base dir" &= typDir
     , layout = "layout" &= help "Layout dir" &= typDir
+    , full = False &= help "Full build (ignore timestamps)"
     }
     &= summary ("Adorn v" ++ showVersion version ++ ", (C) Branden Xia 2026")
 
@@ -70,6 +73,7 @@ main = do
 
   allFiles <- listFilesRecursive base
   let tasks = discoverTask base out mapping allFiles
+  tasks <- bool (filterM taskNecessary) pure full tasks
   print tasks
 
   return ()
