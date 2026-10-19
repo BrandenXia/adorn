@@ -19,6 +19,7 @@ import Data.Void
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
+import Text.Regex.TDFA (Regex, RegexMaker (makeRegexM))
 
 data Action
   = Typst {template :: Maybe FilePath, bodyOnly :: Maybe Bool}
@@ -28,11 +29,10 @@ data Action
   deriving (Show, Eq)
 
 data Mapping = Mapping
-  { srcPat :: String
-  , dstPat :: String
+  { srcPat :: Regex
+  , dstTpl :: String
   , action :: Action
   }
-  deriving (Show, Eq)
 
 type Parser = Parsec Void Text
 
@@ -86,10 +86,21 @@ pAction =
 trim :: String -> String
 trim = dropWhileEnd isSpace . dropWhile isSpace
 
+pRegexAt :: Int -> String -> Parser Regex
+pRegexAt start src = do
+  result <- observing (makeRegexM src)
+  case result of
+    Right regex -> pure regex
+    Left err -> do
+      setOffset start
+      fail "Invalid regex pattern"
+
 pMapping :: Parser Mapping
 pMapping = do
+  start <- getOffset
   src <- trim <$> manyTill anySingle (try (string "=>"))
   when (null src) $ fail "src cannot be empty"
+  src <- pRegexAt start src
   sc
   action <- pAction
   sc

@@ -14,9 +14,12 @@ executable adorn
 
     build-depends:
       base,
+      extra,
+      directory,
       text,
       megaparsec,
       parser-combinators,
-      cmdargs
+      cmdargs,
+      regex-tdfa
 
     default-language: Haskell2010
