@@ -6,13 +6,17 @@ executable adorn
     main-is: Main.hs
     hs-source-dirs: src
 
+    autogen-modules: Paths_adorn
+
     other-modules:
+      Paths_adorn
       Mapping
 
     build-depends:
-        base,
-        text,
-        megaparsec,
-        parser-combinators
+      base,
+      text,
+      megaparsec,
+      parser-combinators,
+      cmdargs
 
     default-language: Haskell2010
