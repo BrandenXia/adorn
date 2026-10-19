@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Mapping (Action, Mapping, parseMappings) where
+module Mapping (Mapping (..), parseMappings) where
 
 import Control.Applicative.Permutations (
   Permutation,
@@ -21,12 +21,7 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Regex.TDFA (Regex, RegexMaker (makeRegexM))
 
-data Action
-  = Typst {template :: Maybe FilePath, bodyOnly :: Maybe Bool}
-  | TypstPDF {template :: Maybe FilePath}
-  | Copy
-  | Ignore
-  deriving (Show, Eq)
+import Action (Action (..))
 
 data Mapping = Mapping
   { srcPat :: Regex
@@ -88,7 +83,7 @@ trim = dropWhileEnd isSpace . dropWhile isSpace
 
 pRegexAt :: Int -> String -> Parser Regex
 pRegexAt start src = do
-  result <- observing (makeRegexM src)
+  result <- observing (makeRegexM $ "\\`" ++ src ++ "\\'")
   case result of
     Right regex -> pure regex
     Left err -> do

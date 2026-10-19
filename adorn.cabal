@@ -10,11 +10,15 @@ executable adorn
 
     other-modules:
       Paths_adorn
+      Action
       Mapping
+      Task
 
     build-depends:
       base,
       extra,
+      array,
+      filepath,
       directory,
       text,
       megaparsec,

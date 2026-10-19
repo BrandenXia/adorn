@@ -1,21 +1,24 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RecordWildCards #-}
 
-import Control.Monad (guard)
 import Control.Monad.Extra (whenM)
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import System.Console.CmdArgs
-import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, makeAbsolute)
+import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, makeAbsolute, setCurrentDirectory)
 import System.Exit (die, exitFailure)
 import System.IO (hPutStr, stderr)
 
 import Mapping
+import Task
 
+import Control.Monad (when)
 import Paths_adorn (version)
+import System.Directory.Extra (listFilesRecursive)
 
 data Adorn = Adorn
-  { mapping :: FilePath
+  { workDir :: FilePath
+  , mapping :: FilePath
   , out :: FilePath
   , base :: FilePath
   , layout :: FilePath
@@ -24,7 +27,8 @@ data Adorn = Adorn
 
 adorn =
   Adorn
-    { mapping = "adorn.mapping" &= help "Mapping file" &= typFile
+    { workDir = "." &= help "Working dir" &= typDir &= name "C"
+    , mapping = "adorn.mapping" &= help "Mapping file" &= typFile
     , out = "dist" &= help "Output dir" &= typDir
     , base = "." &= help "Base dir" &= typDir
     , layout = "layout" &= help "Layout dir" &= typDir
@@ -38,6 +42,12 @@ dieNoNewline msg = do
 main :: IO ()
 main = do
   Adorn{..} <- cmdArgs adorn
+
+  when (workDir /= ".") $ do
+    workDir <- canonicalizePath workDir
+    whenM (not <$> doesDirectoryExist workDir) $
+      die ("Error: Working dir `" ++ workDir ++ "` does not exist or is not a directory.")
+    setCurrentDirectory workDir
 
   base <- canonicalizePath base
   out <- makeAbsolute out
@@ -57,5 +67,9 @@ main = do
       putStrLn "Error parsing mapping file:"
       dieNoNewline err
     Right mappings -> return mappings
+
+  allFiles <- listFilesRecursive base
+  let tasks = discoverTask base out mapping allFiles
+  print tasks
 
   return ()
