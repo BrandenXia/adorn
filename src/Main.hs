@@ -2,10 +2,11 @@
 {-# LANGUAGE RecordWildCards #-}
 
 import Control.Monad.Extra (filterM, whenM)
+import qualified Data.HashSet as HS
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import System.Console.CmdArgs
-import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, makeAbsolute, setCurrentDirectory)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, makeAbsolute, setCurrentDirectory)
 import System.Exit (die, exitFailure)
 import System.IO (hPutStr, stderr)
 
@@ -16,9 +17,11 @@ import Control.Monad (unless, when)
 import Data.Bool (bool)
 import Paths_adorn (version)
 import System.Directory.Extra (listFilesRecursive)
+import System.FilePath (makeRelative, takeDirectory, takeFileName)
 
 data Adorn = Adorn
   { workDir :: FilePath
+  , buildDir :: FilePath
   , mapping :: FilePath
   , out :: FilePath
   , base :: FilePath
@@ -30,6 +33,7 @@ data Adorn = Adorn
 adorn =
   Adorn
     { workDir = "." &= help "Working dir" &= typDir &= name "C"
+    , buildDir = "build" &= help "Build dir" &= typDir &= name "B"
     , mapping = "adorn.mapping" &= help "Mapping file" &= typFile
     , out = "dist" &= help "Output dir" &= typDir
     , base = "." &= help "Base dir" &= typDir
@@ -53,6 +57,7 @@ main = do
     setCurrentDirectory workDir
 
   base <- canonicalizePath base
+  buildDir <- makeAbsolute buildDir
   out <- makeAbsolute out
   layout <- makeAbsolute layout
 
@@ -76,4 +81,16 @@ main = do
   tasks <- bool (filterM taskNecessary) pure full tasks
   print tasks
 
+  createDirectoryIfMissing True buildDir
+
+  layouts <- HS.fromList <$> listLayouts layout
+  print layouts
+
   return ()
+
+listLayouts :: FilePath -> IO [FilePath]
+listLayouts layoutDir = do
+  exists <- not <$> doesDirectoryExist layoutDir
+  files <- bool (listFilesRecursive layoutDir) (pure []) exists
+  let layouts = filter ((== "layout.html") . takeFileName) files
+  return $ map (takeDirectory . makeRelative layoutDir) layouts

@@ -1,6 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Task (Task, discoverTask, taskNecessary) where
+module Task (Task (..), discoverTask, taskNecessary) where
 
 import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
@@ -23,6 +23,7 @@ type RelPath = FilePath
 data Task = Task
   { source :: AbsPath
   , target :: AbsPath
+  , relative :: RelPath
   , action :: Action
   }
   deriving (Show, Eq)
@@ -41,8 +42,9 @@ applyMapping base out abs rel Mapping{..} =
   case matchOnceText srcPat rel of
     Nothing -> Nothing
     Just (_, groups, _) ->
-      let target = normalise $ out </> substitute groups dstTpl
-       in Just $ Task abs target action
+      let targetRel = substitute groups dstTpl
+          target = normalise $ out </> targetRel
+       in Just $ Task abs target targetRel action
 
 substitute :: Array Int (String, (Int, Int)) -> String -> String
 substitute groups = go
