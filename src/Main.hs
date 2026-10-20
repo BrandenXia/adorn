@@ -1,31 +1,32 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 
+import Control.Monad (unless, when)
 import Control.Monad.Extra (filterM, whenM)
+import Data.Bool (bool)
 import qualified Data.HashSet as HS
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
+import Path (Abs, Dir, Path, Rel, filename, parent, parseAbsDir, parseAbsFile, relfile, stripProperPrefix, toFilePath)
 import System.Console.CmdArgs
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, makeAbsolute, setCurrentDirectory)
+import System.Directory.Extra (listFilesRecursive)
 import System.Exit (die, exitFailure)
 import System.IO (hPutStr, stderr)
 
 import Mapping
 import Task
 
-import Control.Monad (unless, when)
-import Data.Bool (bool)
 import Paths_adorn (version)
-import System.Directory.Extra (listFilesRecursive)
-import System.FilePath (makeRelative, takeDirectory, takeFileName)
 
 data Adorn = Adorn
-  { workDir :: FilePath
-  , buildDir :: FilePath
-  , mapping :: FilePath
-  , out :: FilePath
-  , base :: FilePath
-  , layout :: FilePath
+  { workDir :: String
+  , buildDir :: String
+  , mapping :: String
+  , out :: String
+  , base :: String
+  , layout :: String
   , full :: Bool
   }
   deriving (Show, Data, Typeable)
@@ -51,46 +52,47 @@ main = do
   Adorn{..} <- cmdArgs adorn
 
   when (workDir /= ".") $ do
-    workDir <- canonicalizePath workDir
-    whenM (not <$> doesDirectoryExist workDir) $
-      die ("Error: Working dir `" ++ workDir ++ "` does not exist or is not a directory.")
-    setCurrentDirectory workDir
+    workDir <- canonicalizePath workDir >>= parseAbsDir
+    whenM (not <$> doesDirectoryExist (toFilePath workDir)) $
+      die ("Error: Working dir `" ++ toFilePath workDir ++ "` does not exist or is not a directory.")
+    setCurrentDirectory (toFilePath workDir)
 
-  base <- canonicalizePath base
-  buildDir <- makeAbsolute buildDir
-  out <- makeAbsolute out
-  layout <- makeAbsolute layout
+  base <- canonicalizePath base >>= parseAbsDir
+  buildDir <- makeAbsolute buildDir >>= parseAbsDir
+  out <- makeAbsolute out >>= parseAbsDir
+  layout <- makeAbsolute layout >>= parseAbsDir
+  mapping <- makeAbsolute mapping >>= parseAbsFile
 
-  whenM (not <$> doesFileExist mapping) $
-    die ("Error: Mapping file `" ++ mapping ++ "` does not exist.")
-  whenM (not <$> doesDirectoryExist base) $
-    die ("Error: Base dir `" ++ base ++ "` does not exist or is not a directory.")
+  whenM (not <$> doesFileExist (toFilePath mapping)) $
+    die ("Error: Mapping file `" ++ toFilePath mapping ++ "` does not exist.")
+  whenM (not <$> doesDirectoryExist (toFilePath base)) $
+    die ("Error: Base dir `" ++ toFilePath base ++ "` does not exist or is not a directory.")
 
-  whenM (not <$> doesDirectoryExist layout) $
-    putStrLn ("Warning: Layout dir `" ++ layout ++ "` does not exist or is not a directory.")
+  whenM (not <$> doesDirectoryExist (toFilePath layout)) $
+    putStrLn ("Warning: Layout dir `" ++ toFilePath layout ++ "` does not exist or is not a directory.")
 
-  mappingsStr <- TIO.readFile mapping
-  mapping <- case parseMappings mappingsStr mapping of
+  mappingsStr <- TIO.readFile (toFilePath mapping)
+  mapping <- case parseMappings mappingsStr (toFilePath mapping) of
     Left err -> do
       putStrLn "Error parsing mapping file:"
       dieNoNewline err
     Right mappings -> return mappings
 
-  allFiles <- listFilesRecursive base
+  allFiles <- listFilesRecursive (toFilePath base) >>= mapM parseAbsFile
   let tasks = discoverTask base out mapping allFiles
   tasks <- bool (filterM taskNecessary) pure full tasks
   print tasks
 
-  createDirectoryIfMissing True buildDir
+  createDirectoryIfMissing True (toFilePath buildDir)
 
   layouts <- HS.fromList <$> listLayouts layout
   print layouts
 
   return ()
 
-listLayouts :: FilePath -> IO [FilePath]
+listLayouts :: Path Abs Dir -> IO [Path Rel Dir]
 listLayouts layoutDir = do
-  exists <- not <$> doesDirectoryExist layoutDir
-  files <- bool (listFilesRecursive layoutDir) (pure []) exists
-  let layouts = filter ((== "layout.html") . takeFileName) files
-  return $ map (takeDirectory . makeRelative layoutDir) layouts
+  exists <- not <$> doesDirectoryExist (toFilePath layoutDir)
+  files <- bool (listFilesRecursive (toFilePath layoutDir)) (pure []) exists >>= mapM parseAbsFile
+  let layouts = filter ((== [relfile|layout.html|]) . filename) files
+  map parent <$> mapM (stripProperPrefix layoutDir) layouts

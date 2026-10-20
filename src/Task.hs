@@ -6,45 +6,40 @@ import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
 import Data.List.Extra (firstJust)
 import Data.Maybe (mapMaybe)
+import Path (Abs, Dir, File, Path, Rel, fromSomeFile, parseRelFile, stripProperPrefix, toFilePath, (</>))
 import System.Directory (getModificationTime)
 import System.Directory.Extra (doesFileExist)
-import System.FilePath (makeRelative, normalise, (</>))
 import Text.Read (readMaybe)
 import Text.Regex.TDFA
 
 import Action (Action, deps)
 import Mapping (Mapping (..))
 
-type BasePath = FilePath
-type OutPath = FilePath
-type AbsPath = FilePath
-type RelPath = FilePath
-
 data Task = Task
-  { source :: AbsPath
-  , target :: AbsPath
-  , relative :: RelPath
+  { source :: Path Abs File
+  , target :: Path Abs File
+  , relative :: Path Rel File
   , action :: Action
   }
   deriving (Show, Eq)
 
-discoverTask :: BasePath -> OutPath -> [Mapping] -> [AbsPath] -> [Task]
+discoverTask :: Path Abs Dir -> Path Abs Dir -> [Mapping] -> [Path Abs File] -> [Task]
 discoverTask = ((mapMaybe .) .) . discoverFileTask
 
-discoverFileTask :: BasePath -> OutPath -> [Mapping] -> AbsPath -> Maybe Task
-discoverFileTask base out mappings abs =
+discoverFileTask :: Path Abs Dir -> Path Abs Dir -> [Mapping] -> Path Abs File -> Maybe Task
+discoverFileTask base out mappings abs = do
+  rel <- stripProperPrefix base abs
   firstJust
-    (applyMapping base out abs $ makeRelative base abs)
+    (applyMapping out abs rel)
     mappings
 
-applyMapping :: BasePath -> OutPath -> AbsPath -> RelPath -> Mapping -> Maybe Task
-applyMapping base out abs rel Mapping{..} =
-  case matchOnceText srcPat rel of
+applyMapping :: Path Abs Dir -> Path Abs File -> Path Rel File -> Mapping -> Maybe Task
+applyMapping out abs rel Mapping{..} =
+  case matchOnceText srcPat (toFilePath rel) of
     Nothing -> Nothing
-    Just (_, groups, _) ->
-      let targetRel = substitute groups dstTpl
-          target = normalise $ out </> targetRel
-       in Just $ Task abs target targetRel action
+    Just (_, groups, _) -> do
+      targetRel <- parseRelFile (substitute groups dstTpl)
+      Just $ Task abs (out </> targetRel) targetRel action
 
 substitute :: Array Int (String, (Int, Int)) -> String -> String
 substitute groups = go
@@ -60,10 +55,10 @@ substitute groups = go
 
 taskNecessary :: Task -> IO Bool
 taskNecessary Task{..} = do
-  mtimes <- mapM getModificationTime (source : deps action)
-  targetExists <- doesFileExist target
+  mtimes <- mapM getModificationTime (toFilePath source : map fromSomeFile (deps action))
+  targetExists <- doesFileExist (toFilePath target)
   if not targetExists
     then return True
     else do
-      targetMtime <- getModificationTime target
+      targetMtime <- getModificationTime (toFilePath target)
       return $ any (> targetMtime) mtimes

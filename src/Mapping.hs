@@ -16,6 +16,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void
+import Path (File, SomeBase, parseSomeFile)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
@@ -60,19 +61,26 @@ someString = manyTill L.charLiteral (lookAhead (void spaceChar <|> eof))
 someBool :: Parser Bool
 someBool = (string "true" $> True) <|> (string "false" $> False)
 
+someFile :: Parser (SomeBase File)
+someFile = do
+  raw <- someString
+  case parseSomeFile raw of
+    Nothing -> fail ("Invalid template file path: " ++ raw)
+    Just path -> pure path
+
 pAction :: Parser Action
 pAction =
   choice
     [ keyword "typst"
         *> runPermutation
           ( Typst
-              <$> optionalParam "template" someString
+              <$> optionalParam "template" someFile
               <*> optionalParam "bodyOnly" someBool
           )
     , keyword "typstPDF"
         *> runPermutation
           ( TypstPDF
-              <$> optionalParam "template" someString
+              <$> optionalParam "template" someFile
           )
     , keyword "copy" $> Copy
     , keyword "ignore" $> Ignore

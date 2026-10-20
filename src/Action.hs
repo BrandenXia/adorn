@@ -1,13 +1,15 @@
 module Action (Action (..), deps) where
 
+import Path (File, SomeBase)
+
 data Action
-  = Typst {template :: Maybe FilePath, bodyOnly :: Maybe Bool}
-  | TypstPDF {template :: Maybe FilePath}
+  = Typst {template :: Maybe (SomeBase File), bodyOnly :: Maybe Bool}
+  | TypstPDF {template :: Maybe (SomeBase File)}
   | Copy
   | Ignore
   deriving (Show, Eq)
 
-deps :: Action -> [FilePath]
+deps :: Action -> [SomeBase File]
 deps (Typst (Just t) _) = [t]
 deps (TypstPDF (Just t)) = [t]
 deps _ = []

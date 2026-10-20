@@ -19,7 +19,7 @@ executable adorn
       base,
       extra,
       array,
-      filepath,
+      path,
       directory,
       text,
       megaparsec,

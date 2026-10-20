@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Executor () where
@@ -19,18 +20,15 @@ import qualified Data.Text.Template as Tpl
 
 import Action (Action (..))
 import Control.Applicative ((<|>))
-import Control.Monad (guard, join, (>=>))
+import Control.Monad (join, (>=>))
 import Control.Monad.Trans.Maybe (MaybeT (..), hoistMaybe, runMaybeT)
-import System.FilePath (takeDirectory, (</>))
+import Path (Abs, Dir, File, Path, Rel, parent, relfile, toFilePath, (</>))
 import Task (Task (..))
-
-type AbsPath = FilePath
-type RelPath = FilePath
 
 newtype Layout = Layout Template deriving (Show, Eq)
 
-readLayout :: AbsPath -> IO Layout
-readLayout = TIO.readFile >=> (return . Layout . Tpl.template)
+readLayout :: Path Abs File -> IO Layout
+readLayout = (TIO.readFile . toFilePath) >=> (return . Layout . Tpl.template)
 
 toLayout :: Text -> Layout
 toLayout = Layout . Tpl.template
@@ -48,13 +46,13 @@ instance Semigroup Layout where
   (<>) = composeLayouts
 
 data ExecutorCfg = ExecutorCfg
-  { buildDir :: AbsPath
-  , layoutDir :: AbsPath
-  , layouts :: HashSet RelPath
+  { buildDir :: Path Abs Dir
+  , layoutDir :: Path Abs Dir
+  , layouts :: HashSet (Path Rel Dir)
   }
 
 data ExecutorState = ExecutorState
-  { layoutCache :: HashMap RelPath (Maybe Layout)
+  { layoutCache :: HashMap (Path Rel Dir) (Maybe Layout)
   }
 
 type Executor = ReaderT ExecutorCfg (StateT ExecutorState IO)
@@ -67,19 +65,21 @@ executeTasks cfg tasks = do
 executeTask :: (MonadReader ExecutorCfg m, MonadState ExecutorState m, MonadIO m) => Task -> m ()
 executeTask task = undefined
 
-getLayout :: (MonadReader ExecutorCfg m, MonadState ExecutorState m, MonadIO m) => RelPath -> m (Maybe Layout)
+getLayout :: (MonadReader ExecutorCfg m, MonadState ExecutorState m, MonadIO m) => Path Rel Dir -> m (Maybe Layout)
 getLayout path = do
   cache <- gets layoutCache
   join
     <$> runMaybeT
       ( MaybeT (pure $ HM.lookup path cache) <|> do
-          let parentDir = takeDirectory path
-          guard (parentDir /= ".")
-          parentLayout <- lift $ getLayout parentDir
+          let parentDir = parent path
+          parentLayout <-
+            if parentDir == path
+              then pure Nothing
+              else lift $ getLayout parentDir
           hasLayout <- asks (HS.member path . layouts)
           layout <- whenMaybe hasLayout $ do
             layoutDir <- asks layoutDir
-            let layoutPath = layoutDir </> path
+            let layoutPath = layoutDir </> path </> [relfile|layout.html|]
             liftIO $ readLayout layoutPath
           modify' $ \s -> s{layoutCache = HM.insert path layout $ layoutCache s}
           return $ parentLayout <> layout
