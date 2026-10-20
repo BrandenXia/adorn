@@ -1,9 +1,10 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 
-import Control.Monad (unless, when)
-import Control.Monad.Extra (filterM, whenM)
+import Control.Monad (forM_, unless, when)
+import Control.Monad.Extra (filterM, findM, whenM)
 import Data.Bool (bool)
 import qualified Data.HashSet as HS
 import qualified Data.Text.IO as TIO
@@ -18,6 +19,9 @@ import System.IO (hPutStr, stderr)
 import Mapping
 import Task
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except (runExceptT, throwE)
+import Data.List (intercalate)
 import Paths_adorn (version)
 
 data Adorn = Adorn
@@ -80,6 +84,17 @@ main = do
 
   allFiles <- listFilesRecursive (toFilePath base) >>= mapM parseAbsFile
   let tasks = discoverTask base out mapping allFiles
+
+  runExceptT
+    ( forM_ tasks $ \task -> do
+        failures <- liftIO $ taskDepsExist task
+        unless (null failures) $ throwE failures
+    )
+    >>= \case
+      Left failures ->
+        die $ "Error: " ++ intercalate ", " (map show failures) ++ " does not exist or is not a file."
+      Right _ -> return ()
+
   tasks <- bool (filterM taskNecessary) pure full tasks
   print tasks
 

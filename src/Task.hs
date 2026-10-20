@@ -1,18 +1,20 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Task (Task (..), discoverTask, taskNecessary) where
+module Task (Task (..), discoverTask, taskDepsExist, taskNecessary) where
 
 import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
 import Data.List.Extra (firstJust)
 import Data.Maybe (mapMaybe)
-import Path (Abs, Dir, File, Path, Rel, fromSomeFile, parseRelFile, stripProperPrefix, toFilePath, (</>))
+import Path (Abs, Dir, File, Path, Rel, SomeBase, fromSomeFile, parseRelFile, stripProperPrefix, toFilePath, (</>))
 import System.Directory (getModificationTime)
 import System.Directory.Extra (doesFileExist)
 import Text.Read (readMaybe)
 import Text.Regex.TDFA
 
 import Action (Action, deps)
+import Control.Monad (filterM)
+import Control.Monad.Extra (allM, notM)
 import Mapping (Mapping (..))
 
 data Task = Task
@@ -52,6 +54,9 @@ substitute groups = go
           Just n | inRange (bounds groups) n -> fst (groups ! n) ++ go rest
           _ -> '$' : go xs
   go (x : xs) = x : go xs
+
+taskDepsExist :: Task -> IO [SomeBase File]
+taskDepsExist Task{..} = filterM (notM . doesFileExist . fromSomeFile) $ deps action
 
 taskNecessary :: Task -> IO Bool
 taskNecessary Task{..} = do
