@@ -135,6 +135,7 @@ getLayout path = do
             layoutDir <- asks layoutDir
             let layoutPath = layoutDir </> path </> [relfile|layout.html|]
             liftIO $ readLayout $ toFilePath layoutPath
-          modify' $ \s -> s{layoutCache = HM.insert path layout $ layoutCache s}
-          return $ parentLayout <> layout
+          let composed = parentLayout <> layout
+          modify' $ \s -> s{layoutCache = HM.insert path composed $ layoutCache s}
+          return composed
       )
