@@ -14,7 +14,7 @@ import System.Directory.Extra (doesFileExist)
 import Text.Read (readMaybe)
 import Text.Regex.TDFA
 
-import Action (Action, deps)
+import Action (Action (..), deps)
 import Mapping (Mapping (..))
 
 data Task = Task
@@ -59,6 +59,7 @@ taskDepsExist :: Task -> IO [SomeBase File]
 taskDepsExist Task{..} = filterM (notM . doesFileExist . fromSomeFile) $ deps action
 
 taskNecessary :: Task -> IO Bool
+taskNecessary Task{action = Ignore} = return False
 taskNecessary Task{..} = do
   mtimes <- mapM getModificationTime (toFilePath source : map fromSomeFile (deps action))
   targetExists <- doesFileExist (toFilePath target)
