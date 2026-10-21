@@ -4,24 +4,26 @@
 {-# LANGUAGE RecordWildCards #-}
 
 import Control.Monad (forM_, unless, when)
-import Control.Monad.Extra (filterM, findM, whenM)
+import Control.Monad.Extra (filterM, whenM)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except (runExceptT, throwE)
 import Data.Bool (bool)
 import qualified Data.HashSet as HS
+import Data.List (intercalate)
+import Data.Maybe (isNothing)
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import Path (Abs, Dir, Path, Rel, filename, parent, parseAbsDir, parseAbsFile, relfile, stripProperPrefix, toFilePath)
 import System.Console.CmdArgs
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, makeAbsolute, setCurrentDirectory)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, findExecutable, makeAbsolute, setCurrentDirectory)
 import System.Directory.Extra (listFilesRecursive)
 import System.Exit (die, exitFailure)
 import System.IO (hPutStr, stderr)
 
+import Executor
 import Mapping
 import Task
 
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (runExceptT, throwE)
-import Data.List (intercalate)
 import Paths_adorn (version)
 
 data Adorn = Adorn
@@ -53,6 +55,8 @@ dieNoNewline msg = do
 
 main :: IO ()
 main = do
+  checkRequirements
+
   Adorn{..} <- cmdArgs adorn
 
   when (workDir /= ".") $ do
@@ -84,7 +88,6 @@ main = do
 
   allFiles <- listFilesRecursive (toFilePath base) >>= mapM parseAbsFile
   let tasks = discoverTask base out mapping allFiles
-
   runExceptT
     ( forM_ tasks $ \task -> do
         failures <- liftIO $ taskDepsExist task
@@ -94,16 +97,29 @@ main = do
       Left failures ->
         die $ "Error: " ++ intercalate ", " (map show failures) ++ " does not exist or is not a file."
       Right _ -> return ()
-
   tasks <- bool (filterM taskNecessary) pure full tasks
-  print tasks
 
   createDirectoryIfMissing True (toFilePath buildDir)
 
   layouts <- HS.fromList <$> listLayouts layout
-  print layouts
+  executeTasks
+    tasks
+    ExecutorCfg
+      { buildDir = buildDir
+      , layoutDir = layout
+      , layouts = layouts
+      }
 
   return ()
+
+checkRequirements :: IO ()
+checkRequirements =
+  let
+    cli tool =
+      whenM (isNothing <$> findExecutable tool) $
+        die ("Error: Required tool `" ++ tool ++ "` is not installed or not in PATH.")
+   in
+    mapM_ cli ["typst"]
 
 listLayouts :: Path Abs Dir -> IO [Path Rel Dir]
 listLayouts layoutDir = do

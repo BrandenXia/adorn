@@ -77,11 +77,7 @@ pAction =
               <$> optionalParam "template" someFile
               <*> optionalParam "bodyOnly" someBool
           )
-    , keyword "typstPDF"
-        *> runPermutation
-          ( TypstPDF
-              <$> optionalParam "template" someFile
-          )
+    , keyword "typstPDF" $> TypstPDF
     , keyword "copy" $> Copy
     , keyword "ignore" $> Ignore
     ]

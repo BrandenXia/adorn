@@ -2,6 +2,8 @@
 
 module Task (Task (..), discoverTask, taskDepsExist, taskNecessary) where
 
+import Control.Monad (filterM)
+import Control.Monad.Extra (notM)
 import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
 import Data.List.Extra (firstJust)
@@ -13,8 +15,6 @@ import Text.Read (readMaybe)
 import Text.Regex.TDFA
 
 import Action (Action, deps)
-import Control.Monad (filterM)
-import Control.Monad.Extra (allM, notM)
 import Mapping (Mapping (..))
 
 data Task = Task
