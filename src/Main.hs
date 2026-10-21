@@ -102,15 +102,17 @@ main = do
   createDirectoryIfMissing True (toFilePath buildDir)
 
   layouts <- HS.fromList <$> listLayouts layout
-  executeTasks
-    tasks
-    ExecutorCfg
-      { buildDir = buildDir
-      , layoutDir = layout
-      , layouts = layouts
-      }
+  success <-
+    executeTasks
+      tasks
+      ExecutorCfg
+        { buildDir = buildDir
+        , layoutDir = layout
+        , layouts = layouts
+        }
 
-  return ()
+  unless success $ do
+    die "Error: One or more tasks failed to execute."
 
 checkRequirements :: IO ()
 checkRequirements =
