@@ -1,7 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -9,7 +8,7 @@ module Executor (executeTasks, ExecutorCfg (..)) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
-import Control.Monad (guard, join, unless, void, (>=>))
+import Control.Monad (guard, join, unless, void)
 import Control.Monad.Extra (allM, whenMaybe)
 import Control.Monad.Reader
 import Control.Monad.State.Strict
@@ -19,11 +18,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import Data.Maybe (isJust)
-import Data.Text (Text)
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import Data.Text.Template (Template)
-import qualified Data.Text.Template as Tpl
 import GHC.IO.Exception (ExitCode (..))
 import Path (Abs, Dir, File, Path, Rel, fromSomeFile, parent, relfile, toFilePath, (</>))
 import System.Directory (copyFile, createDirectoryIfMissing)
@@ -32,27 +27,8 @@ import Text.HTML.TagSoup (parseTags, renderTags)
 
 import Action (Action (..))
 import Html (appendStyle, extractTag)
+import Layout
 import Task (Task (..))
-
-newtype Layout = Layout Template deriving (Show, Eq)
-
-readLayout :: FilePath -> IO Layout
-readLayout = TIO.readFile >=> (return . Layout . Tpl.template)
-
-toLayout :: Text -> Layout
-toLayout = Layout . Tpl.template
-
-applyLayout :: Layout -> (Text -> Text) -> Text
-applyLayout (Layout tpl) = TL.toStrict . Tpl.render tpl
-
-composeLayouts :: Layout -> Layout -> Layout
-composeLayouts outer (Layout innerTpl) = toLayout $ applyLayout outer ctx
- where
-  ctx "child" = Tpl.showTemplate innerTpl
-  ctx _ = ""
-
-instance Semigroup Layout where
-  (<>) = composeLayouts
 
 data ExecutorCfg = ExecutorCfg
   { buildDir :: Path Abs Dir
@@ -86,7 +62,16 @@ executeTask = fmap isJust . runMaybeT . execute
         compile source compileTarget ["-f", "html", "--features", "html"]
 
         template <- liftIO $ traverse (readLayout . fromSomeFile) template
-        parentLayout <- lift $ getLayout $ parent relative
+
+        layoutDir <- asks layoutDir
+        layouts <- asks layouts
+        parentLayout <- do
+          cache <- gets layoutCache
+          (result, newCache) <-
+            lift $ runStateT (getLayout layoutDir layouts (parent relative)) cache
+          modify' $ \s -> s{layoutCache = newCache}
+          pure result
+
         layout <- hoistMaybe $ parentLayout <> template
 
         tmpHtml <- tryIO $ TIO.readFile $ toFilePath compileTarget
@@ -119,24 +104,3 @@ executeTask = fmap isJust . runMaybeT . execute
           putStrLn $ "Stdout: " ++ stdout
           putStrLn $ "Stderr: " ++ stderr
           pure False
-
-getLayout :: (MonadReader ExecutorCfg m, MonadState ExecutorState m, MonadIO m) => Path Rel Dir -> m (Maybe Layout)
-getLayout path = do
-  cache <- gets layoutCache
-  join
-    <$> runMaybeT
-      ( MaybeT (pure $ HM.lookup path cache) <|> do
-          let parentDir = parent path
-          parentLayout <-
-            if parentDir == path
-              then pure Nothing
-              else lift $ getLayout parentDir
-          hasLayout <- asks (HS.member path . layouts)
-          layout <- whenMaybe hasLayout $ do
-            layoutDir <- asks layoutDir
-            let layoutPath = layoutDir </> path </> [relfile|layout.html|]
-            liftIO $ readLayout $ toFilePath layoutPath
-          let composed = parentLayout <> layout
-          modify' $ \s -> s{layoutCache = HM.insert path composed $ layoutCache s}
-          return composed
-      )

@@ -15,6 +15,7 @@ executable adorn
       Mapping
       Task
       Html
+      Layout
 
     build-depends:
       base,
