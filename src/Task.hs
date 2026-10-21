@@ -8,7 +8,7 @@ import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
 import Data.List.Extra (firstJust)
 import Data.Maybe (mapMaybe)
-import Path (Abs, Dir, File, Path, Rel, SomeBase, fromSomeFile, parseRelFile, stripProperPrefix, toFilePath, (</>))
+import Path
 import System.Directory (getModificationTime)
 import System.Directory.Extra (doesFileExist)
 import Text.Read (readMaybe)

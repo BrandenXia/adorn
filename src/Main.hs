@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 
 import Control.Monad (forM_, unless, when)
@@ -8,14 +7,13 @@ import Control.Monad.Extra (filterM, whenM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (runExceptT, throwE)
 import Data.Bool (bool)
-import qualified Data.HashSet as HS
 import Data.List (intercalate)
 import Data.Maybe (isNothing)
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
-import Path (Abs, Dir, Path, Rel, filename, parent, parseAbsDir, parseAbsFile, relfile, stripProperPrefix, toFilePath)
+import Path
 import System.Console.CmdArgs
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, findExecutable, makeAbsolute, setCurrentDirectory)
+import System.Directory
 import System.Directory.Extra (listFilesRecursive)
 import System.Exit (die, exitFailure)
 import System.IO (hPutStr, stderr)
@@ -95,13 +93,13 @@ main = do
     )
     >>= \case
       Left failures ->
-        die $ "Error: " ++ intercalate ", " (map show failures) ++ " does not exist or is not a file."
+        die $ "Error: " ++ intercalate ", " (map show failures) ++ " does not exist."
       Right _ -> return ()
   tasks <- bool (filterM taskNecessary) pure full tasks
 
   createDirectoryIfMissing True (toFilePath buildDir)
 
-  layouts <- HS.fromList <$> listLayouts layout
+  layouts <- listLayouts layout
   success <-
     executeTasks
       tasks
@@ -122,10 +120,3 @@ checkRequirements =
         die ("Error: Required tool `" ++ tool ++ "` is not installed or not in PATH.")
    in
     mapM_ cli ["typst"]
-
-listLayouts :: Path Abs Dir -> IO [Path Rel Dir]
-listLayouts layoutDir = do
-  exists <- not <$> doesDirectoryExist (toFilePath layoutDir)
-  files <- bool (listFilesRecursive (toFilePath layoutDir)) (pure []) exists >>= mapM parseAbsFile
-  let layouts = filter ((== [relfile|layout.html|]) . filename) files
-  map parent <$> mapM (stripProperPrefix layoutDir) layouts

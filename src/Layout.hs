@@ -2,13 +2,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Layout (Layout (..), readLayout, toLayout, applyLayout, getLayout) where
+module Layout (listLayouts, Layout (..), readLayout, toLayout, applyLayout, getLayout) where
 
 import Control.Applicative ((<|>))
 import Control.Monad ((>=>))
 import Control.Monad.Extra (join, whenMaybe)
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe (MaybeT (..))
+import Data.Bool (bool)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
 import Data.HashSet (HashSet)
@@ -19,6 +20,16 @@ import qualified Data.Text.Lazy as TL
 import Data.Text.Template (Template)
 import qualified Data.Text.Template as Tpl
 import Path
+import System.Directory (doesDirectoryExist)
+import System.Directory.Extra (listFilesRecursive)
+
+listLayouts :: Path Abs Dir -> IO (HashSet (Path Rel Dir))
+listLayouts layoutDir =
+  HS.fromList <$> do
+    exists <- not <$> doesDirectoryExist (toFilePath layoutDir)
+    files <- bool (listFilesRecursive (toFilePath layoutDir)) (pure []) exists >>= mapM parseAbsFile
+    let layouts = filter ((== [relfile|layout.html|]) . filename) files
+    map parent <$> mapM (stripProperPrefix layoutDir) layouts
 
 newtype Layout = Layout Template deriving (Show, Eq)
 

@@ -20,7 +20,7 @@ import qualified Data.HashSet as HS
 import Data.Maybe (isJust)
 import qualified Data.Text.IO as TIO
 import GHC.IO.Exception (ExitCode (..))
-import Path (Abs, Dir, File, Path, Rel, fromSomeFile, parent, relfile, toFilePath, (</>))
+import Path
 import System.Directory (copyFile, createDirectoryIfMissing)
 import System.Process.Extra (readProcessWithExitCode)
 import Text.HTML.TagSoup (parseTags, renderTags)
