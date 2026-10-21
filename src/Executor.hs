@@ -82,6 +82,7 @@ executeTask = fmap isJust . runMaybeT . execute
       TypstPDF -> compile source target ["-f", "pdf"]
       Typst{..} -> do
         compileTarget <- asks $ (</> relative) . buildDir
+        tryIO $ ensureParentExists compileTarget
         compile source compileTarget ["-f", "html", "--features", "html"]
 
         template <- liftIO $ traverse (readLayout . fromSomeFile) template
