@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Layout (listLayouts, Layout (..), readLayout, toLayout, applyLayout, getLayout) where
+module Layout (toLayoutFile, LayoutSet, listLayouts, Layout (..), readLayout, toLayout, applyLayout, getLayout, getFileLayout) where
 
 import Control.Applicative ((<|>))
 import Control.Monad ((>=>))
@@ -23,7 +23,12 @@ import Path
 import System.Directory (doesDirectoryExist)
 import System.Directory.Extra (listFilesRecursive)
 
-listLayouts :: Path Abs Dir -> IO (HashSet (Path Rel Dir))
+toLayoutFile :: Path Rel Dir -> Path Rel File
+toLayoutFile dir = dir </> [relfile|layout.html|]
+
+type LayoutSet = HashSet (Path Rel Dir)
+
+listLayouts :: Path Abs Dir -> IO LayoutSet
 listLayouts layoutDir =
   HS.fromList <$> do
     exists <- not <$> doesDirectoryExist (toFilePath layoutDir)
@@ -71,9 +76,19 @@ getLayout layoutDir layouts path = do
               else lift $ getLayout layoutDir layouts parentDir
           let hasLayout = HS.member path layouts
           layout <- whenMaybe hasLayout $ do
-            let layoutPath = layoutDir </> path </> [relfile|layout.html|]
+            let layoutPath = layoutDir </> toLayoutFile path
             liftIO $ readLayout $ toFilePath layoutPath
           let composed = parentLayout <> layout
           modify' $ \s -> HM.insert path composed s
           return composed
       )
+
+getFileLayout :: LayoutSet -> Path Rel File -> [Path Rel Dir]
+getFileLayout set relFile = filter (`HS.member` set) $ getPossibleLayouts relFile
+
+getPossibleLayouts :: Path Rel File -> [Path Rel Dir]
+getPossibleLayouts = reverse . go . parent
+ where
+  go dir
+    | parent dir == dir = [dir]
+    | otherwise = dir : go (parent dir)

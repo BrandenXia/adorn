@@ -1,4 +1,4 @@
-module Action (Action (..), deps) where
+module Action (Action (..), actionDeps) where
 
 import Path (File, SomeBase)
 
@@ -9,6 +9,6 @@ data Action
   | Ignore
   deriving (Show, Eq)
 
-deps :: Action -> [SomeBase File]
-deps (Typst (Just t) _) = [t]
-deps _ = []
+actionDeps :: Action -> [SomeBase File]
+actionDeps (Typst (Just t) _) = [t]
+actionDeps _ = []

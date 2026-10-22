@@ -22,6 +22,7 @@ import Executor
 import Mapping
 import Task
 
+import Layout
 import Paths_adorn (version)
 
 data Adorn = Adorn
@@ -84,8 +85,10 @@ main = do
       dieNoNewline err
     Right mappings -> return mappings
 
+  layouts <- listLayouts layout
+
   allFiles <- listFilesRecursive (toFilePath base) >>= mapM parseAbsFile
-  let tasks = discoverTask base out mapping allFiles
+  let tasks = discoverTask base out layout layouts mapping allFiles
   runExceptT
     ( forM_ tasks $ \task -> do
         failures <- liftIO $ taskDepsExist task
@@ -99,7 +102,6 @@ main = do
 
   createDirectoryIfMissing True (toFilePath buildDir)
 
-  layouts <- listLayouts layout
   success <-
     executeTasks
       tasks
