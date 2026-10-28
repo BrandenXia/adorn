@@ -89,7 +89,16 @@ main = do
   layouts <- listLayouts layout
 
   allFiles <- listFilesRecursive (toFilePath base) >>= mapM parseAbsFile
-  let tasks = discoverTask cwd base out layout layouts mapping allFiles
+  let discoveryCfg =
+        DiscoveryCfg
+          { workingDir = cwd
+          , sourceDir = base
+          , outputDir = out
+          , layoutRoot = layout
+          , layoutSet = layouts
+          , mappings = mapping
+          }
+      tasks = discoverTask discoveryCfg allFiles
   runExceptT
     ( forM_ tasks $ \task -> do
         failures <- liftIO $ taskDepsExist task

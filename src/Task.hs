@@ -1,12 +1,11 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Task (Task (..), discoverTask, taskDepsExist, taskNecessary) where
+module Task (Task (..), DiscoveryCfg (..), discoverTask, taskDepsExist, taskNecessary) where
 
 import Control.Monad (filterM)
 import Control.Monad.Extra (notM)
 import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
-import qualified Data.HashSet as HS
 import Data.List.Extra (firstJust)
 import Data.Maybe (mapMaybe)
 import Path
@@ -28,28 +27,35 @@ data Task = Task
   }
   deriving (Show, Eq)
 
-discoverTask :: Path Abs Dir -> Path Abs Dir -> Path Abs Dir -> Path Abs Dir -> LayoutSet -> [Mapping] -> [Path Abs File] -> [Task]
-discoverTask cwd base out layout layoutSet mappings = mapMaybe (discoverFileTask cwd base out layout layoutSet mappings)
+data DiscoveryCfg = DiscoveryCfg
+  { workingDir :: Path Abs Dir
+  , sourceDir :: Path Abs Dir
+  , outputDir :: Path Abs Dir
+  , layoutRoot :: Path Abs Dir
+  , layoutSet :: LayoutSet
+  , mappings :: [Mapping]
+  }
 
-discoverFileTask :: Path Abs Dir -> Path Abs Dir -> Path Abs Dir -> Path Abs Dir -> LayoutSet -> [Mapping] -> Path Abs File -> Maybe Task
-discoverFileTask cwd base out layout layoutSet mappings abs = do
-  rel <- stripProperPrefix base abs
-  firstJust
-    (applyMapping cwd out layout layoutSet abs rel)
-    mappings
+discoverTask :: DiscoveryCfg -> [Path Abs File] -> [Task]
+discoverTask cfg = mapMaybe (discoverFileTask cfg)
 
-applyMapping :: Path Abs Dir -> Path Abs Dir -> Path Abs Dir -> LayoutSet -> Path Abs File -> Path Rel File -> Mapping -> Maybe Task
-applyMapping cwd out layout layoutSet abs rel Mapping{..} =
+discoverFileTask :: DiscoveryCfg -> Path Abs File -> Maybe Task
+discoverFileTask cfg@DiscoveryCfg{..} abs = do
+  rel <- stripProperPrefix sourceDir abs
+  firstJust (applyMapping cfg abs rel) mappings
+
+applyMapping :: DiscoveryCfg -> Path Abs File -> Path Rel File -> Mapping -> Maybe Task
+applyMapping DiscoveryCfg{..} abs rel Mapping{..} =
   case matchOnceText srcPat (toFilePath rel) of
     Nothing -> Nothing
     Just (_, groups, _) -> do
       targetRel <- parseRelFile (substitute groups dstTpl)
-      let resolvedAction = resolveAction cwd action
+      let resolvedAction = resolveAction workingDir action
       Just $
-        Task abs (out </> targetRel) targetRel resolvedAction $
+        Task abs (outputDir </> targetRel) targetRel resolvedAction $
           abs
             : actionDeps resolvedAction
-            ++ map ((layout </>) . toLayoutFile) (getFileLayout layoutSet rel)
+            ++ map ((layoutRoot </>) . toLayoutFile) (getFileLayout layoutSet rel)
 
 substitute :: Array Int (String, (Int, Int)) -> String -> String
 substitute groups = go
