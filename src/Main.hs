@@ -65,6 +65,7 @@ main = do
     setCurrentDirectory (toFilePath workDir)
 
   base <- canonicalizePath base >>= parseAbsDir
+  cwd <- getCurrentDirectory >>= parseAbsDir
   buildDir <- makeAbsolute buildDir >>= parseAbsDir
   out <- makeAbsolute out >>= parseAbsDir
   layout <- makeAbsolute layout >>= parseAbsDir
@@ -88,7 +89,7 @@ main = do
   layouts <- listLayouts layout
 
   allFiles <- listFilesRecursive (toFilePath base) >>= mapM parseAbsFile
-  let tasks = discoverTask base out layout layouts mapping allFiles
+  let tasks = discoverTask cwd base out layout layouts mapping allFiles
   runExceptT
     ( forM_ tasks $ \task -> do
         failures <- liftIO $ taskDepsExist task

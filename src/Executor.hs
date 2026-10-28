@@ -61,7 +61,7 @@ executeTask = fmap isJust . runMaybeT . execute
         tryIO $ ensureParentExists compileTarget
         compile source compileTarget ["-f", "html", "--features", "html"]
 
-        template <- liftIO $ traverse (readLayout . fromSomeFile) template
+        template <- liftIO $ traverse (readLayout . toFilePath) template
 
         layoutDir <- asks layoutDir
         layouts <- asks layouts

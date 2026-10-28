@@ -22,12 +22,12 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Regex.TDFA (Regex, RegexMaker (makeRegexM))
 
-import Action (Action (..))
+import Action
 
 data Mapping = Mapping
   { srcPat :: Regex
   , dstTpl :: String
-  , action :: Action
+  , action :: Action Unresolved
   }
 
 type Parser = Parsec Void Text
@@ -68,7 +68,7 @@ someFile = do
     Nothing -> fail ("Invalid template file path: " ++ raw)
     Just path -> pure path
 
-pAction :: Parser Action
+pAction :: Parser (Action Unresolved)
 pAction =
   choice
     [ keyword "typst"
