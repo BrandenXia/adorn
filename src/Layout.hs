@@ -15,7 +15,8 @@ import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import Data.Text (Text)
 import qualified Data.Text.IO as TIO
-import Text.Mustache (Template, compileTemplate, substitute)
+import Text.Mustache (Template, ToMustache, compileTemplate, substitute, toMustache)
+import Text.Mustache.Types (Value (String))
 import Path
 import System.Directory (doesDirectoryExist)
 import System.Directory.Extra (listFilesRecursive)
@@ -47,11 +48,14 @@ toLayout :: Text -> Either String Layout
 toLayout source =
   either (Left . show) (Right . Layout . pure) $ compileTemplate "layout" source
 
-applyLayout :: Layout -> HashMap Text Text -> Text
+applyLayout :: (ToMustache value) => Layout -> HashMap Text value -> Text
 applyLayout (Layout templates) context = foldr render child templates
  where
-  child = HM.lookupDefault "" "child" context
-  render tpl content = substitute tpl (HM.insert "child" content context)
+  values = HM.map toMustache context
+  child = case HM.lookup "child" values of
+    Just (String content) -> content
+    _ -> ""
+  render tpl content = substitute tpl (HM.insert "child" (toMustache content) values)
 
 instance Semigroup Layout where
   Layout outer <> Layout inner = Layout (outer ++ inner)

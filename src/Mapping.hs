@@ -29,6 +29,10 @@ data Mapping = Mapping
   , dstTpl :: String
   , action :: Action Unresolved
   }
+  | GeneratedMapping
+  { dstTpl :: String
+  , action :: Action Unresolved
+  }
 
 type Parser = Parsec Void Text
 
@@ -68,6 +72,20 @@ someFile = do
     Nothing -> fail ("Invalid template file path: " ++ raw)
     Just path -> pure path
 
+pIndexAction :: Parser (Action Unresolved)
+pIndexAction =
+  keyword "index" *> runPermutation
+    ( Index
+        <$> requiredParam "template" someFile
+        <*> requiredParam "selection" someSelection
+    )
+ where
+  someSelection = do
+    start <- getOffset
+    raw <- takeWhile1P (Just "selection regex") (not . isSpace)
+    void $ pRegexAt start (T.unpack raw)
+    pure $ T.unpack raw
+
 pAction :: Parser (Action Unresolved)
 pAction =
   choice
@@ -80,6 +98,7 @@ pAction =
     , keyword "typstPDF" $> TypstPDF
     , keyword "copy" $> Copy
     , keyword "ignore" $> Ignore
+    , pIndexAction
     ]
 
 trim :: String -> String
@@ -95,18 +114,32 @@ pRegexAt start src = do
       fail "Invalid regex pattern"
 
 pMapping :: Parser Mapping
-pMapping = do
+pMapping = try pGeneratedMapping <|> pFileMapping
+
+pGeneratedMapping :: Parser Mapping
+pGeneratedMapping = do
+  action <- pIndexAction
+  dst <- pDestination
+  return $ GeneratedMapping dst action
+
+pDestination :: Parser String
+pDestination = do
+  sc
+  void $ string "=>"
+  sc
+  dst <- trim <$> manyTill anySingle (lookAhead (void eol <|> eof))
+  when (null dst) $ fail "dst cannot be empty"
+  return dst
+
+pFileMapping :: Parser Mapping
+pFileMapping = do
   start <- getOffset
   src <- trim <$> manyTill anySingle (try (string "=>"))
   when (null src) $ fail "src cannot be empty"
   src <- pRegexAt start src
   sc
   action <- pAction
-  sc
-  void $ string "=>"
-  sc
-  dst <- trim <$> manyTill anySingle (lookAhead (void eol <|> eof))
-  when (null dst) $ fail "dst cannot be empty"
+  dst <- pDestination
   return $ Mapping src dst action
 
 pMappings :: Parser [Mapping]

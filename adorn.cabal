@@ -15,10 +15,13 @@ executable adorn
       Mapping
       Task
       Html
+      Index
       Layout
 
     build-depends:
       base,
+      bytestring,
+      filepath,
       extra,
       array,
       path,

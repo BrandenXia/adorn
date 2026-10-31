@@ -16,6 +16,7 @@ type family ActionFilePath status where
 
 data Action status
   = Typst {template :: Maybe (ActionFilePath status File), bodyOnly :: Maybe Bool}
+  | Index {indexTemplate :: ActionFilePath status File, selection :: String}
   | TypstPDF
   | Copy
   | Ignore
@@ -25,11 +26,14 @@ deriving instance (Eq (ActionFilePath status File)) => Eq (Action status)
 
 actionDeps :: Action Resolved -> [Path Abs File]
 actionDeps (Typst (Just t) _) = [t]
+actionDeps (Index t _) = [t]
 actionDeps _ = []
 
 resolveAction :: Path Abs Dir -> Action Unresolved -> Action Resolved
 resolveAction cwd (Typst template bodyOnly) =
   Typst (resolveFilePath cwd <$> template) bodyOnly
+resolveAction cwd (Index template selection) =
+  Index (resolveFilePath cwd template) selection
 resolveAction _ TypstPDF = TypstPDF
 resolveAction _ Copy = Copy
 resolveAction _ Ignore = Ignore
