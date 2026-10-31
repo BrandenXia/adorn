@@ -18,15 +18,16 @@ import qualified Data.HashMap.Strict as HM
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import Data.Maybe (isJust)
+import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import GHC.IO.Exception (ExitCode (..))
 import Path
 import System.Directory (copyFile, createDirectoryIfMissing)
 import System.Process.Extra (readProcessWithExitCode)
-import Text.HTML.TagSoup (parseTags, renderTags)
+import Text.HTML.TagSoup (innerText, parseTags, renderTags)
 
 import Action (Action (..))
-import Html (appendStyle, extractTag)
+import Html (appendStyle, extractTag, setTitle)
 import Layout
 import Task (Task (..))
 
@@ -78,11 +79,13 @@ executeTask = fmap isJust . runMaybeT . execute
         let tags = parseTags tmpHtml
             css = extractTag "style" tags
             body = extractTag "body" tags
+            title = innerText $ parseTags $ extractTag "title" tags
         let applied = applyLayout layout $ \case
               "child" -> body
               _ -> ""
         let appended = appendStyle (parseTags applied) css
-        tryIO $ TIO.writeFile (toFilePath target) (renderTags appended)
+            titled = if T.null title then appended else setTitle appended title
+        tryIO $ TIO.writeFile (toFilePath target) (renderTags titled)
 
   tryIO :: (MonadIO m) => IO a -> MaybeT m a
   tryIO action = MaybeT $ do

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Html (extractTag, appendStyle) where
+module Html (extractTag, appendStyle, setTitle) where
 
 import Data.Text (Text)
 import Text.HTML.TagSoup
@@ -10,6 +10,23 @@ extractTag name tags =
   let start = drop 1 $ dropWhile (~/= TagOpen name []) tags
       content = takeWhile (~/= TagClose name) start
    in renderTags content
+
+setTitle :: [Tag Text] -> Text -> [Tag Text]
+setTitle tags title =
+  case break (isTagOpenName "head") tags of
+    (before, openHead : rest) ->
+      case break (== TagClose "head") rest of
+        (headTags, closeHead : after) ->
+          before ++ [openHead] ++ removeTitles headTags ++ titleTags ++ (closeHead : after)
+        _ -> tags
+    _ -> tags
+ where
+  titleTags = [TagOpen "title" [], TagText title, TagClose "title"]
+  removeTitles [] = []
+  removeTitles (tag : rest)
+    | isTagOpenName "title" tag =
+        removeTitles $ drop 1 $ dropWhile (/= TagClose "title") rest
+    | otherwise = tag : removeTitles rest
 
 appendStyle :: [Tag Text] -> Text -> [Tag Text]
 appendStyle tags css =
