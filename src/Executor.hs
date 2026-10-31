@@ -60,7 +60,15 @@ executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
       context <- buildIO "read index entries" Nothing $ indexContext relative entries
       write $ applyLayout layout context
   buildIO "save build state" (Just state) $ TIO.writeFile state (taskSignature task)
+  buildIO "report completed action" Nothing $ putStrLn $
+    actionName ++ maybe "" ((" " ++) . toFilePath) (taskSource task) ++ " => " ++ toFilePath target
  where
+  actionName = case operation of
+    CopyFile{} -> "copy"
+    ComposeFile{} -> "compose"
+    CompileHtml{} -> "typst"
+    CompilePdf{} -> "typstPDF"
+    GenerateIndex{} -> "index"
   copy source = buildIO "copy source" (Just $ toFilePath source) $ copyFile (toFilePath source) (toFilePath target)
   write = buildIO "write output" (Just $ toFilePath target) . TIO.writeFile (toFilePath target)
 
