@@ -1,28 +1,21 @@
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 
-import Control.Monad (forM_, unless, when)
-import Control.Monad.Extra (filterM, whenM)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (runExceptT, throwE)
-import Data.Bool (bool)
-import Data.List (intercalate)
+import Control.Monad (unless, when)
+import Control.Monad.Except (ExceptT, runExceptT)
 import Data.Maybe (isNothing)
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import Path
 import System.Console.CmdArgs
 import System.Directory
-import System.Directory.Extra (listFilesRecursive)
-import System.Exit (die, exitFailure)
-import System.IO (hPutStr, stderr)
+import System.Exit (die)
 
-import Executor
-import Mapping
-import Task
-
-import Layout
+import BuildError
+import Executor (executePlan)
+import Layout (listLayouts)
+import Mapping (parseMappings)
+import Plan
 import Paths_adorn (version)
 
 data Adorn = Adorn
@@ -36,6 +29,7 @@ data Adorn = Adorn
   }
   deriving (Show, Data, Typeable)
 
+adorn :: Adorn
 adorn =
   Adorn
     { workDir = "." &= help "Working dir" &= typDir &= name "C"
@@ -48,87 +42,47 @@ adorn =
     }
     &= summary ("Adorn v" ++ showVersion version ++ ", (C) Branden Xia 2026")
 
-dieNoNewline msg = do
-  hPutStr stderr msg
-  exitFailure
-
 main :: IO ()
 main = do
-  checkRequirements
+  options <- cmdArgs adorn
+  runExceptT (runBuild options) >>= either (die . renderBuildError) pure
 
-  Adorn{..} <- cmdArgs adorn
+runBuild :: Adorn -> ExceptT BuildError IO ()
+runBuild Adorn{..} = do
+  when (workDir /= ".") $ buildIO "set working directory" (Just workDir) $ setCurrentDirectory workDir
+  cwd <- buildIO "read working directory" Nothing getCurrentDirectory >>= resolveDir
+  source <- resolveDir base
+  output <- resolveDir out
+  build <- resolveDir buildDir
+  layoutRoot <- resolveDir layout
+  absoluteMapping <- buildIO "resolve mapping file" (Just mapping) $ canonicalizePath mapping
+  mappingPath <- maybe (failBuild "resolve mapping file" (Just mapping) "Expected a file path.") pure $
+    parseAbsFile absoluteMapping
 
-  when (workDir /= ".") $ do
-    workDir <- canonicalizePath workDir >>= parseAbsDir
-    whenM (not <$> doesDirectoryExist (toFilePath workDir)) $
-      die ("Error: Working dir `" ++ toFilePath workDir ++ "` does not exist or is not a directory.")
-    setCurrentDirectory (toFilePath workDir)
+  sourceExists <- buildIO "check source directory" (Just base) $ doesDirectoryExist $ toFilePath source
+  unless sourceExists $ failBuild "configure source directory" (Just base) "Directory does not exist."
 
-  base <- canonicalizePath base >>= parseAbsDir
-  cwd <- getCurrentDirectory >>= parseAbsDir
-  buildDir <- makeAbsolute buildDir >>= parseAbsDir
-  out <- makeAbsolute out >>= parseAbsDir
-  layout <- makeAbsolute layout >>= parseAbsDir
-  mapping <- makeAbsolute mapping >>= parseAbsFile
-
-  whenM (not <$> doesFileExist (toFilePath mapping)) $
-    die ("Error: Mapping file `" ++ toFilePath mapping ++ "` does not exist.")
-  whenM (not <$> doesDirectoryExist (toFilePath base)) $
-    die ("Error: Base dir `" ++ toFilePath base ++ "` does not exist or is not a directory.")
-
-  whenM (not <$> doesDirectoryExist (toFilePath layout)) $
-    putStrLn ("Warning: Layout dir `" ++ toFilePath layout ++ "` does not exist or is not a directory.")
-
-  mappingsStr <- TIO.readFile (toFilePath mapping)
-  mapping <- case parseMappings mappingsStr (toFilePath mapping) of
-    Left err -> do
-      putStrLn "Error parsing mapping file:"
-      dieNoNewline err
-    Right mappings -> return mappings
-
-  layouts <- listLayouts layout
-
-  allFiles <- listFilesRecursive (toFilePath base) >>= mapM parseAbsFile
-  let discoveryCfg =
-        DiscoveryCfg
-          { workingDir = cwd
-          , sourceDir = base
-          , outputDir = out
-          , layoutRoot = layout
-          , layoutSet = layouts
-          , mappings = mapping
-          }
-      tasks = discoverTask discoveryCfg allFiles
-  runExceptT
-    ( forM_ tasks $ \task -> do
-        failures <- liftIO $ taskDepsExist task
-        unless (null failures) $ throwE failures
-    )
-    >>= \case
-      Left failures ->
-        die $ "Error: " ++ intercalate ", " (map show failures) ++ " does not exist."
-      Right _ -> return ()
-  tasks <- bool (filterM taskNecessary) pure full tasks
-
-  createDirectoryIfMissing True (toFilePath buildDir)
-
-  success <-
-    executeTasks
-      tasks
-      ExecutorCfg
-        { buildDir = buildDir
-        , layoutDir = layout
-        , layouts = layouts
+  contents <- buildIO "read mappings" (Just $ toFilePath mappingPath) $ TIO.readFile $ toFilePath mappingPath
+  rules <- either (failBuild "parse mappings" (Just $ toFilePath mappingPath)) pure $
+    parseMappings contents (toFilePath mappingPath)
+  layouts <- buildIO "discover layouts" (Just $ toFilePath layoutRoot) $ listLayouts layoutRoot
+  let cfg = PlanCfg
+        { workingDir = cwd
+        , sourceDir = source
+        , outputDir = output
+        , buildDir = build
+        , layoutRoot = layoutRoot
+        , mappingFile = mappingPath
+        , layoutSet = layouts
+        , mappings = rules
         }
-
-  unless success $ do
-    die "Error: One or more tasks failed to execute."
-
-checkRequirements :: IO ()
-checkRequirements =
-  let
-    cli tool =
-      whenM (isNothing <$> findExecutable tool) $
-        die ("Error: Required tool `" ++ tool ++ "` is not installed or not in PATH.")
-   in
-    mapM_ cli ["typst"]
+  plan <- buildPlan cfg full
+  when (requiresTypst plan) $ do
+    executable <- buildIO "find Typst" Nothing $ findExecutable "typst"
+    when (isNothing executable) $ failBuild "check build tools" Nothing "Required tool `typst` is not installed or not in PATH."
+  executePlan plan
+ where
+  resolveDir :: FilePath -> ExceptT BuildError IO (Path Abs Dir)
+  resolveDir path = do
+    absolute <- buildIO "resolve directory" (Just path) $ canonicalizePath path
+    maybe (failBuild "resolve directory" (Just path) "Expected a directory path.") pure $ parseAbsDir absolute

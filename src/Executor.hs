@@ -1,134 +1,78 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TypeApplications #-}
 
-module Executor (executeTasks, ExecutorCfg (..)) where
+module Executor (executePlan) where
 
-import Control.Applicative ((<|>))
-import Control.Exception (IOException, displayException, try)
-import Control.Monad (guard, join, unless, void)
-import Control.Monad.Extra (allM, whenMaybe)
-import Control.Monad.Reader
-import Control.Monad.State.Strict
-import Control.Monad.Trans.Maybe (MaybeT (..), hoistMaybe, runMaybeT)
+import Control.Monad (when)
+import Control.Monad.Except (ExceptT)
+import Control.Monad.State.Strict (StateT, evalStateT, get, modify')
+import Control.Monad.Trans.Class (lift)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
-import Data.HashSet (HashSet)
-import qualified Data.HashSet as HS
-import Data.List (partition)
-import Data.Maybe (isJust)
-import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import GHC.IO.Exception (ExitCode (..))
 import Path
-import System.Directory (copyFile, createDirectoryIfMissing)
-import System.IO (hPutStrLn, stderr)
-import System.Process.Extra (readProcessWithExitCode)
-import Text.HTML.TagSoup (innerText, parseTags, renderTags)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, removeFile)
 
-import Action (Action (..))
-import Html (appendStyle, extractTag, setTitle)
+import BuildError
+import Html (HtmlDocument (documentBody), parseDocument, renderDocument)
 import Index (indexContext)
-import Layout
-import Task (Task (..))
+import Layout (Layout, applyLayout, readLayout)
+import Plan (BuildPlan, pendingTasks, planBuildDir)
+import Task
+import Typst (compileTypst)
 
-data ExecutorCfg = ExecutorCfg
-  { buildDir :: Path Abs Dir
-  , layoutDir :: Path Abs Dir
-  , layouts :: HashSet (Path Rel Dir)
-  }
+type Executor = StateT (HashMap (Path Abs File) Layout) (ExceptT BuildError IO)
 
-data ExecutorState = ExecutorState
-  { layoutCache :: HashMap (Path Rel Dir) (Maybe Layout)
-  }
+executePlan :: BuildPlan -> ExceptT BuildError IO ()
+executePlan plan = evalStateT (mapM_ (executeTask $ planBuildDir plan) $ pendingTasks plan) HM.empty
 
-type Executor = ReaderT ExecutorCfg (StateT ExecutorState IO)
-
-executeTasks :: [Task] -> ExecutorCfg -> IO Bool
-executeTasks tasks cfg = do
-  let initialState = ExecutorState{layoutCache = HM.empty}
-      (indexes, regular) = partition isIndex tasks
-      isIndex Task{action = Index{}} = True
-      isIndex _ = False
-  evalStateT (runReaderT (allM executeTask (regular ++ indexes)) cfg) initialState
-
-executeTask :: (MonadReader ExecutorCfg m, MonadState ExecutorState m, MonadIO m) => Task -> m Bool
-executeTask = fmap isJust . runMaybeT . execute
+executeTask :: Path Abs Dir -> Task -> Executor ()
+executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
+  let cache = taskCacheFile buildDir task
+      state = cache "state"
+      deps = cache "dependencies"
+      html = cache "compiled.html"
+  buildIO "create output directory" (Just $ toFilePath $ parent target) $
+    createDirectoryIfMissing True $ toFilePath $ parent target
+  buildIO "create build state directory" (Just $ taskCacheDir buildDir task) $
+    createDirectoryIfMissing True $ taskCacheDir buildDir task
+  buildIO "invalidate build state" (Just state) $ do
+    exists <- doesFileExist state
+    when exists $ removeFile state
+  case operation of
+    CopyFile source -> copy source
+    ComposeFile source ->
+      if null taskLayouts then copy source else do
+        content <- buildIO "read composition source" (Just $ toFilePath source) $ TIO.readFile $ toFilePath source
+        layout <- loadLayouts taskLayouts
+        write $ applyLayout layout $ HM.singleton "child" content
+    CompilePdf source -> lift $ compileTypst source (toFilePath target) ["-f", "pdf"] deps
+    CompileHtml source bodyOnly -> do
+      lift $ compileTypst source html ["-f", "html", "--features", "html"] deps
+      content <- buildIO "read compiled HTML" (Just html) $ TIO.readFile html
+      let document = parseDocument content
+      if bodyOnly then write $ documentBody document else do
+        layout <- loadLayouts taskLayouts
+        write $ renderDocument layout document
+    GenerateIndex entries -> do
+      layout <- loadLayouts taskLayouts
+      context <- buildIO "read index entries" Nothing $ indexContext relative entries
+      write $ applyLayout layout context
+  buildIO "save build state" (Just state) $ TIO.writeFile state (taskSignature task)
  where
-  execute Task{..} = do
-    unless (action == Ignore) $ tryIO $ ensureParentExists target
-    case action of
-      Ignore -> pure ()
-      Copy -> tryIO $ copyFile (toFilePath source) (toFilePath target)
-      Compose -> do
-        layout <- loadParentLayout relative
-        case layout of
-          Nothing -> tryIO $ copyFile (toFilePath source) (toFilePath target)
-          Just layout -> do
-            content <- tryIO $ TIO.readFile $ toFilePath source
-            let composed = applyLayout layout $ HM.singleton "child" content
-            tryIO $ TIO.writeFile (toFilePath target) composed
-      TypstPDF -> compile source target ["-f", "pdf"]
-      Index{..} -> do
-        template <- tryIO $ readLayout $ toFilePath indexTemplate
-        parentLayout <- loadParentLayout relative
-        context <- tryIO $ indexContext relative taskEntries
-        let layout = maybe template (<> template) parentLayout
-        tryIO $ TIO.writeFile (toFilePath target) (applyLayout layout context)
-      Typst{..} -> do
-        compileTarget <- asks $ (</> relative) . buildDir
-        tryIO $ ensureParentExists compileTarget
-        compile source compileTarget ["-f", "html", "--features", "html"]
+  copy source = buildIO "copy source" (Just $ toFilePath source) $ copyFile (toFilePath source) (toFilePath target)
+  write = buildIO "write output" (Just $ toFilePath target) . TIO.writeFile (toFilePath target)
 
-        template <- tryIO $ traverse (readLayout . toFilePath) template
-
-        parentLayout <- loadParentLayout relative
-
-        layout <- hoistMaybe $ parentLayout <> template
-
-        tmpHtml <- tryIO $ TIO.readFile $ toFilePath compileTarget
-        let tags = parseTags tmpHtml
-            css = extractTag "style" tags
-            body = extractTag "body" tags
-            title = innerText $ parseTags $ extractTag "title" tags
-        let context = HM.fromList $ ("child", body) : [("title", title) | not (T.null title)]
-            applied = applyLayout layout context
-        let appended = appendStyle (parseTags applied) css
-            titled = if T.null title then appended else setTitle appended title
-        tryIO $ TIO.writeFile (toFilePath target) (renderTags titled)
-
-  loadParentLayout relative = do
-    layoutDir <- asks layoutDir
-    layouts <- asks layouts
-    cache <- gets layoutCache
-    (result, newCache) <-
-      tryIO $ runStateT (getLayout layoutDir layouts (parent relative)) cache
-    modify' $ \s -> s{layoutCache = newCache}
-    pure result
-
-  tryIO :: (MonadIO m) => IO a -> MaybeT m a
-  tryIO action = MaybeT $ do
-    result <- liftIO $ try @IOException action
-    case result of
-      Left err -> do
-        liftIO $ hPutStrLn stderr (displayException err)
-        pure Nothing
-      Right value -> pure (Just value)
-
-  ensureParentExists path = createDirectoryIfMissing True $ toFilePath $ parent path
-
-  compile source target flags = do
-    ok <- tryIO $ typstCompile source target flags
-    guard ok
-
-  typstCompile source target flags =
-    readProcessWithExitCode "typst" (["compile"] ++ flags ++ [toFilePath source, toFilePath target]) ""
-      >>= \case
-        (ExitSuccess, _, _) -> pure True
-        (ExitFailure code, stdout, stderr) -> do
-          putStrLn $ "Typst failed with exit code " ++ show code
-          putStrLn $ "Stdout: " ++ stdout
-          putStrLn $ "Stderr: " ++ stderr
-          pure False
+loadLayouts :: [Path Abs File] -> Executor (Maybe Layout)
+loadLayouts [] = pure Nothing
+loadLayouts paths = Just . mconcat <$> mapM load paths
+ where
+  load path = do
+    cache <- get
+    case HM.lookup path cache of
+      Just layout -> pure layout
+      Nothing -> do
+        layout <- buildIO "compile layout" (Just $ toFilePath path) $ readLayout $ toFilePath path
+        modify' $ HM.insert path layout
+        pure layout

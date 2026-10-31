@@ -28,10 +28,12 @@ data Mapping = Mapping
   { srcPat :: Regex
   , dstTpl :: String
   , action :: Action Unresolved
+  , mappingOrigin :: String
   }
   | GeneratedMapping
   { dstTpl :: String
-  , action :: Action Unresolved
+  , indexSpec :: IndexSpec Unresolved
+  , mappingOrigin :: String
   }
 
 type Parser = Parsec Void Text
@@ -43,21 +45,14 @@ keyword :: Text -> Parser Text
 keyword name = try (string name <* notFollowedBy alphaNumChar) <* sc
 
 param :: Text -> Parser a -> Parser a
-param name parse = do
-  void $ string (name <> "=")
-  val <- parse
-  sc
-  return val
+param name parser = string (name <> "=") *> parser <* sc
 
 optionalParam :: Text -> Parser a -> Permutation Parser (Maybe a)
 optionalParam name parser =
-  toPermutationWithDefault
-    Nothing
-    (Just <$> param name parser)
+  toPermutationWithDefault Nothing (Just <$> param name parser)
 
 requiredParam :: Text -> Parser a -> Permutation Parser a
-requiredParam name parser =
-  toPermutation (param name parser)
+requiredParam name = toPermutation . param name
 
 someString :: Parser String
 someString = manyTill L.charLiteral (lookAhead (void spaceChar <|> eof))
@@ -72,10 +67,10 @@ someFile = do
     Nothing -> fail ("Invalid template file path: " ++ raw)
     Just path -> pure path
 
-pIndexAction :: Parser (Action Unresolved)
-pIndexAction =
+pIndexSpec :: Parser (IndexSpec Unresolved)
+pIndexSpec =
   keyword "index" *> runPermutation
-    ( Index
+    ( IndexSpec
         <$> requiredParam "template" someFile
         <*> requiredParam "selection" someSelection
     )
@@ -83,8 +78,7 @@ pIndexAction =
   someSelection = do
     start <- getOffset
     raw <- takeWhile1P (Just "selection regex") (not . isSpace)
-    void $ pRegexAt start (T.unpack raw)
-    pure $ T.unpack raw
+    maybe (setOffset start *> fail "Invalid selection regex") pure $ compileSelection (T.unpack raw)
 
 pAction :: Parser (Action Unresolved)
 pAction =
@@ -99,29 +93,27 @@ pAction =
     , keyword "copy" $> Copy
     , keyword "compose" $> Compose
     , keyword "ignore" $> Ignore
-    , pIndexAction
+    , Index <$> pIndexSpec
     ]
 
 trim :: String -> String
 trim = dropWhileEnd isSpace . dropWhile isSpace
 
 pRegexAt :: Int -> String -> Parser Regex
-pRegexAt start src = do
-  result <- observing (makeRegexM $ "\\`" ++ src ++ "\\'")
-  case result of
-    Right regex -> pure regex
-    Left err -> do
-      setOffset start
-      fail "Invalid regex pattern"
+pRegexAt start src =
+  maybe (setOffset start *> fail "Invalid regex pattern") pure $ makeRegexM ("\\`" ++ src ++ "\\'")
 
 pMapping :: Parser Mapping
-pMapping = try pGeneratedMapping <|> pFileMapping
+pMapping = (generated *> pGeneratedMapping) <|> pFileMapping
+ where
+  generated = try $ lookAhead $ keyword "index" *> (string "template=" <|> string "selection=")
 
 pGeneratedMapping :: Parser Mapping
 pGeneratedMapping = do
-  action <- pIndexAction
+  origin <- sourcePosPretty <$> getSourcePos
+  spec <- pIndexSpec
   dst <- pDestination
-  return $ GeneratedMapping dst action
+  return $ GeneratedMapping dst spec origin
 
 pDestination :: Parser String
 pDestination = do
@@ -134,14 +126,15 @@ pDestination = do
 
 pFileMapping :: Parser Mapping
 pFileMapping = do
+  origin <- sourcePosPretty <$> getSourcePos
   start <- getOffset
   src <- trim <$> manyTill anySingle (try (string "=>"))
   when (null src) $ fail "src cannot be empty"
-  src <- pRegexAt start src
+  pattern <- pRegexAt start src
   sc
-  action <- pAction
+  parsedAction <- pAction
   dst <- pDestination
-  return $ Mapping src dst action
+  return $ Mapping pattern dst parsedAction origin
 
 pMappings :: Parser [Mapping]
 pMappings =
@@ -151,7 +144,7 @@ pMappings =
     sc
     result <- optional (notFollowedBy (char '#') *> pMapping)
     sc
-    optional (L.skipLineComment "#")
+    void $ optional (L.skipLineComment "#")
     void eol <|> eof
     pure result
 

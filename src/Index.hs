@@ -4,21 +4,20 @@
 module Index (indexContext, entryURL) where
 
 import qualified Data.ByteString as BS
-import Data.Char (chr, toLower, toUpper)
+import Data.Char (chr, isAlphaNum, isAscii, toLower)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import Numeric (showHex)
 import Path
 import System.FilePath (dropTrailingPathSeparator, splitDirectories, takeBaseName, takeExtension)
-import Text.HTML.TagSoup (innerText, parseTags)
 import Text.Mustache (object, toMustache, (~>))
 import Text.Mustache.Types (Value)
+import Text.Printf (printf)
 
-import Html (extractTag)
+import Html (documentTitle)
 import Task (IndexEntry (..))
 
 indexContext :: Path Rel File -> [IndexEntry] -> IO (HashMap Text Value)
@@ -29,7 +28,7 @@ indexContext index entries = do
   entryContext IndexEntry{..} = do
     title <-
       if map toLower (takeExtension $ toFilePath entryTarget) `elem` [".html", ".htm"]
-        then innerText . parseTags . extractTag "title" . parseTags <$> TIO.readFile (toFilePath entryOutput)
+        then documentTitle <$> TIO.readFile (toFilePath entryOutput)
         else pure ""
     let label = if T.null title then T.pack (takeBaseName $ toFilePath entrySource) else title
     pure $ object
@@ -39,8 +38,6 @@ indexContext index entries = do
       , "target" ~> T.pack (toFilePath entryTarget)
       ]
 
--- Links are relative to the generated index, including when it lives in a
--- different output directory. Encode each path segment rather than its slashes.
 entryURL :: Path Rel File -> Path Rel File -> Text
 entryURL index target =
   let (up, down) = dropCommon (segments $ parent index) (segments target)
@@ -55,10 +52,7 @@ encodeSegment :: String -> Text
 encodeSegment = T.pack . concatMap encodeByte . BS.unpack . TE.encodeUtf8 . T.pack
  where
   encodeByte byte
-    | byte >= 65 && byte <= 90
-        || byte >= 97 && byte <= 122
-        || byte >= 48 && byte <= 57
-        || byte `elem` [45, 46, 95, 126] = [chr $ fromIntegral byte]
-    | otherwise = '%' : map toUpper (pad $ showHex byte "")
-  pad [digit] = ['0', digit]
-  pad digits = digits
+    | isAscii char && (isAlphaNum char || char `elem` ['-', '.', '_', '~']) = [char]
+    | otherwise = printf "%%%02X" byte
+   where
+    char = chr $ fromIntegral byte

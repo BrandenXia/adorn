@@ -1,32 +1,28 @@
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE QuasiQuotes #-}
 
-module Task (Task (..), IndexEntry (..), DiscoveryCfg (..), discoverTask, taskDepsExist, taskNecessary) where
+module Task (Task (..), Operation (..), IndexEntry (..), taskSource, taskNeedsTypst, taskIsIndex, taskSignature, taskCacheDir, taskCacheFile) where
 
-import Control.Monad (filterM)
-import Control.Monad.Extra (notM)
-import Data.Array (Array, bounds, inRange, (!))
-import Data.Char (isDigit)
-import Data.List.Extra (firstJust)
-import Data.List (sortOn)
-import Data.Maybe (mapMaybe)
+import Data.Text (Text)
+import qualified Data.Text as T
 import Path
-import System.Directory (getModificationTime)
-import System.Directory.Extra (doesFileExist)
-import Text.Read (readMaybe)
-import Text.Regex.TDFA
-
-import Action
-import Layout (LayoutSet, getFileLayout, toLayoutFile)
-import Mapping (Mapping (..))
+import qualified System.FilePath as FP
 
 data Task = Task
-  { source :: Path Abs File
-  , target :: Path Abs File
+  { target :: Path Abs File
   , relative :: Path Rel File
-  , action :: Action Resolved
+  , operation :: Operation
   , taskDeps :: [Path Abs File]
-  , taskEntries :: [IndexEntry]
+  , taskLayouts :: [Path Abs File]
+  , taskOrigin :: String
   }
+  deriving (Show, Eq)
+
+data Operation
+  = CopyFile (Path Abs File)
+  | ComposeFile (Path Abs File)
+  | CompileHtml (Path Abs File) Bool
+  | CompilePdf (Path Abs File)
+  | GenerateIndex [IndexEntry]
   deriving (Show, Eq)
 
 data IndexEntry = IndexEntry
@@ -36,88 +32,30 @@ data IndexEntry = IndexEntry
   }
   deriving (Show, Eq)
 
-data DiscoveryCfg = DiscoveryCfg
-  { workingDir :: Path Abs Dir
-  , sourceDir :: Path Abs Dir
-  , outputDir :: Path Abs Dir
-  , layoutRoot :: Path Abs Dir
-  , layoutSet :: LayoutSet
-  , mappings :: [Mapping]
-  }
+taskSource :: Task -> Maybe (Path Abs File)
+taskSource task = case operation task of
+  CopyFile path -> Just path
+  ComposeFile path -> Just path
+  CompileHtml path _ -> Just path
+  CompilePdf path -> Just path
+  GenerateIndex _ -> Nothing
 
-discoverTask :: DiscoveryCfg -> [Path Abs File] -> [Task]
-discoverTask cfg@DiscoveryCfg{..} files = map attachEntries tasks
- where
-  tasks = mapMaybe (discoverFileTask cfg) files ++ mapMaybe generatedTask mappings
-  generatedTask GeneratedMapping{action = Index template selection, ..} = do
-    targetRel <- parseRelFile dstTpl
-    let resolved = resolveAction workingDir (Index template selection)
-    pure $ makeTask cfg (indexTemplate resolved) targetRel resolved
-  generatedTask _ = Nothing
+taskNeedsTypst :: Task -> Bool
+taskNeedsTypst task = case operation task of
+  CompileHtml{} -> True
+  CompilePdf{} -> True
+  _ -> False
 
-  attachEntries task@Task{action = Index{..}} =
-    task{taskEntries = selected selection}
-  attachEntries task = task
+taskIsIndex :: Task -> Bool
+taskIsIndex task = case operation task of
+  GenerateIndex{} -> True
+  _ -> False
 
-  selected pattern =
-    case makeRegexM ("\\`" ++ pattern ++ "\\'") of
-      Nothing -> [] -- Selections are validated when parsing the mapping.
-      Just regex -> sortOn entrySource $ mapMaybe (selectEntry regex) tasks
+taskSignature :: Task -> Text
+taskSignature = T.pack . show
 
-  selectEntry _ Task{action = Ignore} = Nothing
-  selectEntry _ Task{action = Index{}} = Nothing
-  selectEntry regex Task{..} = do
-    rel <- stripProperPrefix sourceDir source
-    if matchTest (regex :: Regex) (toFilePath rel)
-      then Just $ IndexEntry rel relative target
-      else Nothing
+taskCacheDir :: Path Abs Dir -> Task -> FilePath
+taskCacheDir buildDir task = toFilePath (buildDir </> [reldir|.adorn/tasks|] </> relative task)
 
-discoverFileTask :: DiscoveryCfg -> Path Abs File -> Maybe Task
-discoverFileTask cfg@DiscoveryCfg{..} abs = do
-  rel <- stripProperPrefix sourceDir abs
-  firstJust (applyMapping cfg abs rel) mappings
-
-applyMapping :: DiscoveryCfg -> Path Abs File -> Path Rel File -> Mapping -> Maybe Task
-applyMapping _ _ _ GeneratedMapping{} = Nothing
-applyMapping cfg@DiscoveryCfg{..} abs rel Mapping{..} =
-  case matchOnceText srcPat (toFilePath rel) of
-    Nothing -> Nothing
-    Just (_, groups, _) -> do
-      targetRel <- parseRelFile (substitute groups dstTpl)
-      let resolvedAction = resolveAction workingDir action
-      Just $ makeTask cfg abs targetRel resolvedAction
-
-makeTask :: DiscoveryCfg -> Path Abs File -> Path Rel File -> Action Resolved -> Task
-makeTask DiscoveryCfg{..} source targetRel action =
-  Task source (outputDir </> targetRel) targetRel action deps []
- where
-  deps = source : actionDeps action
-    ++ map ((layoutRoot </>) . toLayoutFile) (getFileLayout layoutSet targetRel)
-
-substitute :: Array Int (String, (Int, Int)) -> String -> String
-substitute groups = go
- where
-  go [] = []
-  go ('$' : '$' : xs) = '$' : go xs
-  go ('$' : xs) =
-    let (digits, rest) = span isDigit xs
-     in case readMaybe digits of
-          Just n | inRange (bounds groups) n -> fst (groups ! n) ++ go rest
-          _ -> '$' : go xs
-  go (x : xs) = x : go xs
-
-taskDepsExist :: Task -> IO [Path Abs File]
-taskDepsExist Task{..} = filterM (notM . doesFileExist . toFilePath) taskDeps
-
-taskNecessary :: Task -> IO Bool
-taskNecessary Task{action = Ignore} = return False
--- Index membership can change when a source is added, removed, or remapped.
-taskNecessary Task{action = Index{}} = return True
-taskNecessary Task{..} = do
-  mtimes <- mapM (getModificationTime . toFilePath) taskDeps
-  targetExists <- doesFileExist (toFilePath target)
-  if not targetExists
-    then return True
-    else do
-      targetMtime <- getModificationTime (toFilePath target)
-      return $ any (> targetMtime) mtimes
+taskCacheFile :: Path Abs Dir -> Task -> FilePath -> FilePath
+taskCacheFile buildDir task name = taskCacheDir buildDir task FP.</> name

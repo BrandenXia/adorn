@@ -1,9 +1,40 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Html (extractTag, appendStyle, setTitle) where
+module Html (HtmlDocument (..), parseDocument, renderDocument, documentTitle) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.HashMap.Strict as HM
 import Text.HTML.TagSoup
+
+import Layout (Layout, applyLayout)
+
+data HtmlDocument = HtmlDocument
+  { documentSource :: Text
+  , documentBody :: Text
+  , documentCss :: Text
+  , documentName :: Text
+  }
+
+parseDocument :: Text -> HtmlDocument
+parseDocument source =
+  let tags = parseTags source
+   in HtmlDocument source (extractTag "body" tags) (extractTag "style" tags) (titleFromTags tags)
+
+documentTitle :: Text -> Text
+documentTitle = titleFromTags . parseTags
+
+titleFromTags :: [Tag Text] -> Text
+titleFromTags = innerText . takeWhile (/= TagClose "title") . drop 1 . dropWhile (not . isTagOpenName "title")
+
+renderDocument :: Maybe Layout -> HtmlDocument -> Text
+renderDocument Nothing doc = documentSource doc
+renderDocument layout doc =
+  let title = documentName doc
+      context = HM.fromList $ ("child", documentBody doc) : [("title", title) | not (T.null title)]
+      styled = appendStyle (parseTags $ applyLayout layout context) (documentCss doc)
+      titled = if T.null title then styled else setTitle styled title
+   in renderTags titled
 
 extractTag :: Text -> [Tag Text] -> Text
 extractTag name tags =
@@ -33,11 +64,7 @@ appendStyle tags css =
   case break (== TagClose "style") tags of
     (before, closeStyle : after) ->
       before ++ [TagText ("\n" <> css)] ++ (closeStyle : after)
-    _ -> insertStyle tags css
- where
-  insertStyle ts c =
-    let style = [TagOpen "style" [], TagText c, TagClose "style"]
-     in case break (== TagClose "head") ts of
-          (before, closeHead : after) ->
-            before ++ style ++ (closeHead : after)
-          _ -> ts
+    _ -> case break (== TagClose "head") tags of
+      (before, closeHead : after) ->
+        before ++ [TagOpen "style" [], TagText css, TagClose "style"] ++ (closeHead : after)
+      _ -> tags
