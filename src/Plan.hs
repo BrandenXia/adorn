@@ -1,11 +1,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 
-module Plan (PlanCfg (..), BuildPlan, buildPlan, pendingTasks, planBuildDir, requiresTypst) where
+module Plan (PlanCfg (..), BuildPlan, buildPlan, pendingTasks, planTasks, planBuildDir, planOutputDir, planMappingFile, planChoices, planProtected, requiresTypst) where
 
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Control.Monad.Except (ExceptT, liftEither)
 import Control.Monad.Extra (anyM)
+import qualified Data.Aeson.KeyMap as KM
 import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
 import qualified Data.HashMap.Strict as HM
@@ -22,6 +23,7 @@ import Action
 import BuildError
 import Layout (LayoutSet, getFileLayout, toLayoutFile)
 import Mapping (Mapping (..))
+import Script (runScript)
 import Task
 import Typst (readDependencies)
 
@@ -38,7 +40,12 @@ data PlanCfg = PlanCfg
 
 data BuildPlan = BuildPlan
   { pendingTasks :: [Task]
+  , planTasks :: [Task]
   , planBuildDir :: Path Abs Dir
+  , planOutputDir :: Path Abs Dir
+  , planMappingFile :: Path Abs File
+  , planChoices :: [(Path Abs File, Maybe (Path Abs File))]
+  , planProtected :: [Path Abs File]
   }
 
 requiresTypst :: BuildPlan -> Bool
@@ -50,11 +57,12 @@ buildPlan cfg@PlanCfg{..} full = do
     failBuild "configure source discovery" (Just $ toFilePath sourceDir)
       "The source directory must differ from the output and build directories."
   files <- discoverSources cfg
-  candidates <- liftEither $ discoverTasks cfg files
+  (candidates, choices) <- discoverTasks cfg files
   validateTasks candidates
   tasks <- if full then pure candidates else filterM (taskNecessary buildDir) candidates
   let (indexes, regular) = partition taskIsIndex tasks
-  pure $ BuildPlan (regular ++ indexes) buildDir
+  pure $ BuildPlan (regular ++ indexes) candidates buildDir outputDir mappingFile choices
+    (nub $ files ++ map target candidates ++ concatMap taskDeps candidates)
 
 discoverSources :: PlanCfg -> ExceptT BuildError IO [Path Abs File]
 discoverSources PlanCfg{..} = walk [] sourceDir
@@ -78,13 +86,16 @@ discoverSources PlanCfg{..} = walk [] sourceDir
           then (: []) <$> buildIO "resolve source file" (Just path) (parseAbsFile path)
           else pure []
 
-discoverTasks :: PlanCfg -> [Path Abs File] -> Either BuildError [Task]
+discoverTasks :: PlanCfg -> [Path Abs File] -> ExceptT BuildError IO ([Task], [(Path Abs File, Maybe (Path Abs File))])
 discoverTasks cfg@PlanCfg{..} files = do
-  fileTasks <- catMaybes <$> mapM discoverFile files
+  discovered <- mapM discoverFile files
+  let fileTasks = catMaybes $ map fst discovered
+      choices = [(source, fmap (target . fst) result)
+                | (source, (result, True)) <- zip files discovered]
   indexes <- catMaybes <$> mapM discoverGenerated mappings
   let tasks = fileTasks ++ indexes
       entries = sortOn entrySource
-        [ IndexEntry rel (relative task) (target task)
+        [ IndexEntry rel (relative task) (target task) (taskContext task)
         | (task, _) <- tasks
         , Just source <- [taskSource task]
         , Just rel <- [stripProperPrefix sourceDir source]
@@ -92,24 +103,36 @@ discoverTasks cfg@PlanCfg{..} files = do
       attach (task, Nothing) = task
       attach (task, Just selection) = task{operation = GenerateIndex $
         filter (matchesSelection selection . toFilePath . entrySource) entries}
-  pure $ map attach tasks
+  pure (map attach tasks, choices)
  where
   discoverFile source = case stripProperPrefix sourceDir source of
-    Nothing -> pure Nothing
+    Nothing -> pure (Nothing, False)
     Just rel -> firstMatch source rel mappings
-  firstMatch _ _ [] = pure Nothing
+  firstMatch _ _ [] = pure (Nothing, False)
   firstMatch source rel (GeneratedMapping{} : rest) = firstMatch source rel rest
   firstMatch source rel (Mapping{..} : rest) =
     case matchOnceText srcPat (toFilePath rel) of
       Nothing -> firstMatch source rel rest
-      Just (_, groups, _) -> case action of
-        Ignore -> pure Nothing
-        _ -> do
-          targetRel <- destination mappingOrigin $ substitute groups dstTpl
-          pure $ fileTask cfg mappingOrigin source targetRel (resolveAction workingDir action)
+      Just (_, groups, _) -> do
+        result <- select source groups mappingOrigin KM.empty []
+          (resolveAction workingDir action) dstTpl
+        pure (result, case action of Choose{} -> True; _ -> False)
+
+  select source groups origin context scripts (Choose mode script branches) _ = do
+    (name, nextContext) <- runScript mode script [] source context
+    case [(act, dst) | (branch, act, dst) <- branches, branch == name] of
+      [(act, dst)] -> select source groups origin nextContext (script : scripts) act dst
+      _ -> failBuild "select branch" (Just origin) $
+        "Script " ++ toFilePath script ++ " returned unknown branch " ++ show name
+  select _ _ _ _ _ Ignore _ = pure Nothing
+  select source groups origin context scripts act dst = do
+    targetRel <- liftEither $ destination origin $ substitute groups dst
+    pure $ fmap (\(task, selection) ->
+      (task{taskContext = context, taskDeps = nub (scripts ++ taskDeps task)}, selection)) $
+      fileTask cfg origin source targetRel act
 
   discoverGenerated GeneratedMapping{..} = do
-    targetRel <- destination mappingOrigin dstTpl
+    targetRel <- liftEither $ destination mappingOrigin dstTpl
     pure $ Just $ indexTask cfg mappingOrigin [] targetRel (resolveIndex workingDir indexSpec)
   discoverGenerated _ = pure Nothing
 
@@ -130,6 +153,7 @@ fileTask cfg origin source rel action = case action of
   Copy -> file (CopyFile source) []
   Compose -> file (ComposeFile source) (parentLayouts cfg rel)
   Ignore -> Nothing
+  Choose{} -> Nothing -- Choices are resolved before constructing tasks.
  where
   file op layouts = Just (makeTask cfg origin [source] rel op layouts, Nothing)
 
@@ -142,7 +166,7 @@ parentLayouts PlanCfg{..} rel = map ((layoutRoot </>) . toLayoutFile) $ getFileL
 
 makeTask :: PlanCfg -> String -> [Path Abs File] -> Path Rel File -> Operation -> [Path Abs File] -> Task
 makeTask PlanCfg{..} origin inputs rel op layouts =
-  Task (outputDir </> rel) rel op (nub $ mappingFile : inputs ++ layouts) layouts origin
+  Task (outputDir </> rel) rel op (nub $ mappingFile : inputs ++ layouts) layouts KM.empty origin
 
 validateTasks :: [Task] -> ExceptT BuildError IO ()
 validateTasks tasks = do

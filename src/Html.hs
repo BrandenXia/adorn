@@ -2,6 +2,9 @@
 
 module Html (HtmlDocument (..), parseDocument, renderDocument, documentTitle) where
 
+import qualified Data.Aeson as A
+import qualified Data.Aeson.KeyMap as KM
+import Text.Mustache (toMustache)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
@@ -27,11 +30,14 @@ documentTitle = titleFromTags . parseTags
 titleFromTags :: [Tag Text] -> Text
 titleFromTags = innerText . takeWhile (/= TagClose "title") . drop 1 . dropWhile (not . isTagOpenName "title")
 
-renderDocument :: Maybe Layout -> HtmlDocument -> Text
-renderDocument Nothing doc = documentSource doc
-renderDocument layout doc =
-  let title = documentName doc
-      context = HM.fromList $ ("child", documentBody doc) : [("title", title) | not (T.null title)]
+renderDocument :: A.Object -> Maybe Layout -> HtmlDocument -> Text
+renderDocument _ Nothing doc = documentSource doc
+renderDocument meta layout doc =
+  let title = case KM.lookup "title" meta of
+        Just (A.String value) -> value
+        _ -> documentName doc
+      context = HM.fromList $ [("meta", toMustache $ A.Object meta), ("child", toMustache $ documentBody doc)]
+        ++ [("title", toMustache title) | not (T.null title)]
       styled = appendStyle (parseTags $ applyLayout layout context) (documentCss doc)
       titled = if T.null title then styled else setTitle styled title
    in renderTags titled

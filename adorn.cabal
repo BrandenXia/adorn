@@ -10,6 +10,8 @@ executable adorn
 
     other-modules:
       Paths_adorn
+      Cleanup
+      Script
       Action
       BuildError
       Executor
@@ -23,6 +25,8 @@ executable adorn
 
     build-depends:
       base,
+      aeson,
+      containers,
       bytestring,
       filepath,
       extra,

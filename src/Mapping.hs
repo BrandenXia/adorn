@@ -11,7 +11,7 @@ import Control.Applicative.Permutations (
 import Control.Monad (when)
 import Data.Char (isSpace)
 import Data.Functor (void, ($>))
-import Data.List (dropWhileEnd)
+import Data.List (dropWhileEnd, nub)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -23,6 +23,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Regex.TDFA (Regex, RegexMaker (makeRegexM))
 
 import Action
+import Script (ScriptMode (..))
 
 data Mapping = Mapping
   { srcPat :: Regex
@@ -55,7 +56,8 @@ requiredParam :: Text -> Parser a -> Permutation Parser a
 requiredParam name = toPermutation . param name
 
 someString :: Parser String
-someString = manyTill L.charLiteral (lookAhead (void spaceChar <|> eof))
+someString = (char '"' *> manyTill L.charLiteral (char '"'))
+  <|> manyTill L.charLiteral (lookAhead (void spaceChar <|> eof))
 
 someBool :: Parser Bool
 someBool = (string "true" $> True) <|> (string "false" $> False)
@@ -115,14 +117,50 @@ pGeneratedMapping = do
   dst <- pDestination
   return $ GeneratedMapping dst spec origin
 
+-- Branch destinations end at a semicolon or closing brace. Top-level rules
+-- retain their line-oriented destinations, including spaces.
 pDestination :: Parser String
-pDestination = do
+pDestination = pDestinationWith False
+
+pDestinationWith :: Bool -> Parser String
+pDestinationWith nested = do
   sc
   void $ string "=>"
   sc
-  dst <- trim <$> manyTill anySingle (lookAhead (void eol <|> eof))
+  dst <- trim <$> manyTill anySingle (lookAhead end)
   when (null dst) $ fail "dst cannot be empty"
   return dst
+ where
+  end = if nested then void (oneOf [';', '}']) <|> void eol <|> eof else void eol <|> eof
+
+blockSpace :: Parser ()
+blockSpace = L.space space1 (L.skipLineComment "#") empty
+
+pRoutedAction :: Bool -> Parser (Action Unresolved, String)
+pRoutedAction nested = pChoice <|> pIgnore <|> ((,) <$> pAction <*> pDestinationWith nested)
+ where
+  pIgnore = keyword "ignore" *> ((,) Ignore <$> option "" (pDestinationWith nested))
+  pChoice = do
+    mode <- (keyword "choose" $> Selector) <|> (keyword "check" $> Predicate)
+    script <- param "script" someFile
+    blockSpace
+    void $ char '{'
+    blockSpace
+    branches <- pBranch `sepEndBy1` (char ';' *> blockSpace)
+    void $ char '}'
+    let names = [name | (name, _, _) <- branches]
+    when (length names /= length (nub names)) $ fail "Duplicate branch name"
+    when (mode == Predicate && (length names /= 2 || any (`notElem` names) ["yes", "no"])) $
+      fail "A check requires exactly the yes and no branches"
+    pure (Choose mode script branches, "")
+  pBranch = do
+    name <- T.pack <$> some (alphaNumChar <|> oneOf ['_', '-'])
+    sc
+    void $ char ':'
+    blockSpace
+    (act, dst) <- pRoutedAction True
+    blockSpace
+    pure (name, act, dst)
 
 pFileMapping :: Parser Mapping
 pFileMapping = do
@@ -132,8 +170,7 @@ pFileMapping = do
   when (null src) $ fail "src cannot be empty"
   pattern <- pRegexAt start src
   sc
-  parsedAction <- pAction
-  dst <- pDestination
+  (parsedAction, dst) <- pRoutedAction False
   return $ Mapping pattern dst parsedAction origin
 
 pMappings :: Parser [Mapping]

@@ -2,6 +2,7 @@
 
 module Task (Task (..), Operation (..), IndexEntry (..), taskSource, taskNeedsTypst, taskIsIndex, taskSignature, taskCacheDir, taskCacheFile) where
 
+import Data.Aeson (Object)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Path
@@ -13,6 +14,7 @@ data Task = Task
   , operation :: Operation
   , taskDeps :: [Path Abs File]
   , taskLayouts :: [Path Abs File]
+  , taskContext :: Object
   , taskOrigin :: String
   }
   deriving (Show, Eq)
@@ -29,6 +31,7 @@ data IndexEntry = IndexEntry
   { entrySource :: Path Rel File
   , entryTarget :: Path Rel File
   , entryOutput :: Path Abs File
+  , entryContext :: Object
   }
   deriving (Show, Eq)
 

@@ -4,28 +4,38 @@
 
 module Executor (executePlan) where
 
-import Control.Monad (when)
+import Control.Monad (forM, when)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.State.Strict (StateT, evalStateT, get, modify')
 import Control.Monad.Trans.Class (lift)
+import qualified Data.Aeson as A
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.IO as TIO
 import Path
+import Text.Mustache (toMustache)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, removeFile)
 
 import BuildError
+import Cleanup (finishChoices)
 import Html (HtmlDocument (documentBody), parseDocument, renderDocument)
 import Index (indexContext)
 import Layout (Layout, applyLayout, readLayout)
-import Plan (BuildPlan, pendingTasks, planBuildDir)
+import Plan (BuildPlan, pendingTasks, planTasks, planBuildDir, planOutputDir, planMappingFile, planChoices, planProtected)
 import Task
-import Typst (compileTypst)
+import Typst (compileTypst, readDependencies)
 
 type Executor = StateT (HashMap (Path Abs File) Layout) (ExceptT BuildError IO)
 
 executePlan :: BuildPlan -> ExceptT BuildError IO ()
-executePlan plan = evalStateT (mapM_ (executeTask $ planBuildDir plan) $ pendingTasks plan) HM.empty
+executePlan plan = do
+  evalStateT (mapM_ (executeTask $ planBuildDir plan) $ pendingTasks plan) HM.empty
+  imported <- if null (planChoices plan) then pure [] else
+    concat <$> forM (filter taskNeedsTypst $ planTasks plan) (\task -> do
+      paths <- readDependencies $ taskCacheFile (planBuildDir plan) task "dependencies"
+      forM paths $ \path -> buildIO "resolve Typst input" (Just path) $ parseAbsFile path)
+  finishChoices (planBuildDir plan) (planOutputDir plan) (planMappingFile plan)
+    (planChoices plan) (imported ++ planProtected plan)
 
 executeTask :: Path Abs Dir -> Task -> Executor ()
 executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
@@ -46,7 +56,8 @@ executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
       if null taskLayouts then copy source else do
         content <- buildIO "read composition source" (Just $ toFilePath source) $ TIO.readFile $ toFilePath source
         layout <- loadLayouts taskLayouts
-        write $ applyLayout layout $ HM.singleton "child" content
+        write $ applyLayout layout $ HM.fromList
+          [("child", toMustache content), ("meta", toMustache $ A.Object taskContext)]
     CompilePdf source -> lift $ compileTypst source (toFilePath target) ["-f", "pdf"] deps
     CompileHtml source bodyOnly -> do
       lift $ compileTypst source html ["-f", "html", "--features", "html"] deps
@@ -54,11 +65,11 @@ executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
       let document = parseDocument content
       if bodyOnly then write $ documentBody document else do
         layout <- loadLayouts taskLayouts
-        write $ renderDocument layout document
+        write $ renderDocument taskContext layout document
     GenerateIndex entries -> do
       layout <- loadLayouts taskLayouts
       context <- buildIO "read index entries" Nothing $ indexContext relative entries
-      write $ applyLayout layout context
+      write $ applyLayout layout (HM.insert "meta" (toMustache $ A.Object taskContext) context)
   buildIO "save build state" (Just state) $ TIO.writeFile state (taskSignature task)
   buildIO "report completed action" Nothing $ putStrLn $
     actionName ++ maybe "" ((" " ++) . toFilePath) (taskSource task) ++ " => " ++ toFilePath target

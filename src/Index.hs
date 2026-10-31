@@ -3,6 +3,8 @@
 
 module Index (indexContext, entryURL) where
 
+import qualified Data.Aeson as A
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import Data.Char (chr, isAlphaNum, isAscii, toLower)
 import Data.HashMap.Strict (HashMap)
@@ -22,17 +24,20 @@ import Task (IndexEntry (..))
 
 indexContext :: Path Rel File -> [IndexEntry] -> IO (HashMap Text Value)
 indexContext index entries = do
-  values <- mapM entryContext entries
+  values <- mapM entryValue entries
   pure $ HM.singleton "entries" (toMustache values)
  where
-  entryContext IndexEntry{..} = do
+  entryValue IndexEntry{..} = do
     title <-
       if map toLower (takeExtension $ toFilePath entryTarget) `elem` [".html", ".htm"]
         then documentTitle <$> TIO.readFile (toFilePath entryOutput)
         else pure ""
-    let label = if T.null title then T.pack (takeBaseName $ toFilePath entrySource) else title
+    let label = case KM.lookup "title" entryContext of
+          Just (A.String value) -> value
+          _ -> if T.null title then T.pack (takeBaseName $ toFilePath entrySource) else title
     pure $ object
-      [ "url" ~> entryURL index entryTarget
+      [ "meta" ~> A.Object entryContext
+      , "url" ~> entryURL index entryTarget
       , "title" ~> label
       , "source" ~> T.pack (toFilePath entrySource)
       , "target" ~> T.pack (toFilePath entryTarget)

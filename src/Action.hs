@@ -2,7 +2,9 @@
 
 module Action (Unresolved, Resolved, Action (..), IndexSpec (..), Selection, compileSelection, matchesSelection, resolveAction, resolveIndex) where
 
+import Data.Text (Text)
 import Path
+import Script (ScriptMode)
 import Text.Regex.TDFA (Regex, makeRegexM, matchTest)
 
 data Unresolved
@@ -19,6 +21,7 @@ data Action status
   | Copy
   | Compose
   | Ignore
+  | Choose ScriptMode (ActionFilePath status File) [(Text, Action status, String)]
 
 data IndexSpec status = IndexSpec
   { indexTemplate :: ActionFilePath status File
@@ -35,6 +38,8 @@ matchesSelection (Selection regex) = matchTest regex
 
 resolveAction :: Path Abs Dir -> Action Unresolved -> Action Resolved
 resolveAction cwd (Typst tpl fragment) = Typst (resolveFilePath cwd <$> tpl) fragment
+resolveAction cwd (Choose mode script branches) =
+  Choose mode (resolveFilePath cwd script) [(name, resolveAction cwd act, dst) | (name, act, dst) <- branches]
 resolveAction cwd (Index spec) = Index (resolveIndex cwd spec)
 resolveAction _ TypstPDF = TypstPDF
 resolveAction _ Copy = Copy
