@@ -55,9 +55,7 @@ executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
     ComposeFile source ->
       if null taskLayouts then copy source else do
         content <- buildIO "read composition source" (Just $ toFilePath source) $ TIO.readFile $ toFilePath source
-        layout <- loadLayouts taskLayouts
-        write $ applyLayout layout $ HM.fromList
-          [("child", toMustache content), ("meta", toMustache $ A.Object taskContext)]
+        compose $ HM.singleton "child" $ toMustache content
     CompilePdf source -> lift $ compileTypst source (toFilePath target) ["-f", "pdf"] deps
     CompileHtml source bodyOnly -> do
       lift $ compileTypst source html ["-f", "html", "--features", "html"] deps
@@ -67,9 +65,8 @@ executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
         layout <- loadLayouts taskLayouts
         write $ renderDocument taskContext layout document
     GenerateIndex entries -> do
-      layout <- loadLayouts taskLayouts
       context <- buildIO "read index entries" Nothing $ indexContext relative entries
-      write $ applyLayout layout (HM.insert "meta" (toMustache $ A.Object taskContext) context)
+      compose context
   buildIO "save build state" (Just state) $ TIO.writeFile state (taskSignature task)
   buildIO "report completed action" Nothing $ putStrLn $
     actionName ++ maybe "" ((" " ++) . toFilePath) (taskSource task) ++ " => " ++ toFilePath target
@@ -80,6 +77,9 @@ executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
     CompileHtml{} -> "typst"
     CompilePdf{} -> "typstPDF"
     GenerateIndex{} -> "index"
+  compose context = do
+    layout <- loadLayouts taskLayouts
+    write $ applyLayout layout $ HM.insert "meta" (toMustache $ A.Object taskContext) context
   copy source = buildIO "copy source" (Just $ toFilePath source) $ copyFile (toFilePath source) (toFilePath target)
   write = buildIO "write output" (Just $ toFilePath target) . TIO.writeFile (toFilePath target)
 

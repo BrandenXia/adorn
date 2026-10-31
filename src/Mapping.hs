@@ -11,7 +11,7 @@ import Control.Applicative.Permutations (
 import Control.Monad (when)
 import Data.Char (isSpace)
 import Data.Functor (void, ($>))
-import Data.List (dropWhileEnd, nub)
+import Data.List (dropWhileEnd, nub, sort)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -94,7 +94,6 @@ pAction =
     , keyword "typstPDF" $> TypstPDF
     , keyword "copy" $> Copy
     , keyword "compose" $> Compose
-    , keyword "ignore" $> Ignore
     , Index <$> pIndexSpec
     ]
 
@@ -114,16 +113,11 @@ pGeneratedMapping :: Parser Mapping
 pGeneratedMapping = do
   origin <- sourcePosPretty <$> getSourcePos
   spec <- pIndexSpec
-  dst <- pDestination
+  dst <- pDestination False
   return $ GeneratedMapping dst spec origin
 
--- Branch destinations end at a semicolon or closing brace. Top-level rules
--- retain their line-oriented destinations, including spaces.
-pDestination :: Parser String
-pDestination = pDestinationWith False
-
-pDestinationWith :: Bool -> Parser String
-pDestinationWith nested = do
+pDestination :: Bool -> Parser String
+pDestination nested = do
   sc
   void $ string "=>"
   sc
@@ -137,9 +131,9 @@ blockSpace :: Parser ()
 blockSpace = L.space space1 (L.skipLineComment "#") empty
 
 pRoutedAction :: Bool -> Parser (Action Unresolved, String)
-pRoutedAction nested = pChoice <|> pIgnore <|> ((,) <$> pAction <*> pDestinationWith nested)
+pRoutedAction nested = pChoice <|> pIgnore <|> ((,) <$> pAction <*> pDestination nested)
  where
-  pIgnore = keyword "ignore" *> ((,) Ignore <$> option "" (pDestinationWith nested))
+  pIgnore = keyword "ignore" *> ((,) Ignore <$> option "" (pDestination nested))
   pChoice = do
     mode <- (keyword "choose" $> Selector) <|> (keyword "check" $> Predicate)
     script <- param "script" someFile
@@ -148,9 +142,9 @@ pRoutedAction nested = pChoice <|> pIgnore <|> ((,) <$> pAction <*> pDestination
     blockSpace
     branches <- pBranch `sepEndBy1` (char ';' *> blockSpace)
     void $ char '}'
-    let names = [name | (name, _, _) <- branches]
+    let names = map fst branches
     when (length names /= length (nub names)) $ fail "Duplicate branch name"
-    when (mode == Predicate && (length names /= 2 || any (`notElem` names) ["yes", "no"])) $
+    when (mode == Predicate && sort names /= ["no", "yes"]) $
       fail "A check requires exactly the yes and no branches"
     pure (Choose mode script branches, "")
   pBranch = do
@@ -158,9 +152,9 @@ pRoutedAction nested = pChoice <|> pIgnore <|> ((,) <$> pAction <*> pDestination
     sc
     void $ char ':'
     blockSpace
-    (act, dst) <- pRoutedAction True
+    branch <- pRoutedAction True
     blockSpace
-    pure (name, act, dst)
+    pure (name, branch)
 
 pFileMapping :: Parser Mapping
 pFileMapping = do

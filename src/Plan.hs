@@ -11,7 +11,7 @@ import Data.Array (Array, bounds, inRange, (!))
 import Data.Char (isDigit)
 import qualified Data.HashMap.Strict as HM
 import Data.List (nub, partition, sort, sortOn)
-import Data.Maybe (catMaybes, maybeToList)
+import Data.Maybe (catMaybes, mapMaybe, maybeToList)
 import qualified Data.Text.IO as TIO
 import Path
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, getModificationTime, listDirectory)
@@ -89,7 +89,7 @@ discoverSources PlanCfg{..} = walk [] sourceDir
 discoverTasks :: PlanCfg -> [Path Abs File] -> ExceptT BuildError IO ([Task], [(Path Abs File, Maybe (Path Abs File))])
 discoverTasks cfg@PlanCfg{..} files = do
   discovered <- mapM discoverFile files
-  let fileTasks = catMaybes $ map fst discovered
+  let fileTasks = mapMaybe fst discovered
       choices = [(source, fmap (target . fst) result)
                 | (source, (result, True)) <- zip files discovered]
   indexes <- catMaybes <$> mapM discoverGenerated mappings
@@ -118,18 +118,31 @@ discoverTasks cfg@PlanCfg{..} files = do
           (resolveAction workingDir action) dstTpl
         pure (result, case action of Choose{} -> True; _ -> False)
 
-  select source groups origin context scripts (Choose mode script branches) _ = do
-    (name, nextContext) <- runScript mode script [] source context
-    case [(act, dst) | (branch, act, dst) <- branches, branch == name] of
-      [(act, dst)] -> select source groups origin nextContext (script : scripts) act dst
-      _ -> failBuild "select branch" (Just origin) $
-        "Script " ++ toFilePath script ++ " returned unknown branch " ++ show name
-  select _ _ _ _ _ Ignore _ = pure Nothing
-  select source groups origin context scripts act dst = do
-    targetRel <- liftEither $ destination origin $ substitute groups dst
-    pure $ fmap (\(task, selection) ->
-      (task{taskContext = context, taskDeps = nub (scripts ++ taskDeps task)}, selection)) $
-      fileTask cfg origin source targetRel act
+  select source groups origin context scripts act dst = case act of
+    Choose mode script branches -> do
+      (name, nextContext) <- runScript mode script source context
+      case lookup name branches of
+        Just (next, route) -> select source groups origin nextContext (script : scripts) next route
+        Nothing -> failBuild "select branch" (Just origin) $
+          "Script " ++ toFilePath script ++ " returned unknown branch " ++ show name
+    Ignore -> pure Nothing
+    Index spec -> do
+      rel <- destinationPath
+      pure $ Just $ attach $ indexTask cfg origin [source] rel spec
+    Typst template bodyOnly ->
+      let fragment = bodyOnly == Just True
+       in file (CompileHtml source fragment) $ \rel ->
+            if fragment then [] else parentLayouts cfg rel ++ maybeToList template
+    TypstPDF -> file (CompilePdf source) (const [])
+    Copy -> file (CopyFile source) (const [])
+    Compose -> file (ComposeFile source) (parentLayouts cfg)
+   where
+    destinationPath = liftEither $ destination origin $ substitute groups dst
+    attach (task, selection) =
+      (task{taskContext = context, taskDeps = nub (scripts ++ taskDeps task)}, selection)
+    file op layouts = do
+      rel <- destinationPath
+      pure $ Just $ attach (makeTask cfg origin [source] rel op (layouts rel), Nothing)
 
   discoverGenerated GeneratedMapping{..} = do
     targetRel <- liftEither $ destination mappingOrigin dstTpl
@@ -141,21 +154,6 @@ destination origin raw = case parseRelFile raw of
   Just path -> Right path
   Nothing -> Left $ BuildError "resolve destination" (Just origin) Nothing $
     "Invalid output path " ++ show raw ++ "; expected a file path inside the output directory."
-
-fileTask :: PlanCfg -> String -> Path Abs File -> Path Rel File -> Action Resolved -> Maybe (Task, Maybe Selection)
-fileTask cfg origin source rel action = case action of
-  Index spec -> Just $ indexTask cfg origin [source] rel spec
-  Typst template bodyOnly ->
-    let fragment = bodyOnly == Just True
-     in file (CompileHtml source fragment) $
-          if fragment then [] else parentLayouts cfg rel ++ maybeToList template
-  TypstPDF -> file (CompilePdf source) []
-  Copy -> file (CopyFile source) []
-  Compose -> file (ComposeFile source) (parentLayouts cfg rel)
-  Ignore -> Nothing
-  Choose{} -> Nothing -- Choices are resolved before constructing tasks.
- where
-  file op layouts = Just (makeTask cfg origin [source] rel op layouts, Nothing)
 
 indexTask :: PlanCfg -> String -> [Path Abs File] -> Path Rel File -> IndexSpec Resolved -> (Task, Maybe Selection)
 indexTask cfg origin inputs rel IndexSpec{..} =
