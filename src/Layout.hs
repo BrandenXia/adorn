@@ -5,7 +5,6 @@
 module Layout (toLayoutFile, LayoutSet, listLayouts, Layout (..), readLayout, toLayout, applyLayout, getLayout, getFileLayout) where
 
 import Control.Applicative ((<|>))
-import Control.Monad ((>=>))
 import Control.Monad.Extra (join, whenMaybe)
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe (MaybeT (..))
@@ -16,9 +15,7 @@ import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import Data.Text (Text)
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import Data.Text.Template (Template)
-import qualified Data.Text.Template as Tpl
+import Text.Mustache (Template, compileTemplate, substitute)
 import Path
 import System.Directory (doesDirectoryExist)
 import System.Directory.Extra (listFilesRecursive)
@@ -36,25 +33,28 @@ listLayouts layoutDir =
     let layouts = filter ((== [relfile|layout.html|]) . filename) files
     map parent <$> mapM (stripProperPrefix layoutDir) layouts
 
-newtype Layout = Layout Template deriving (Show, Eq)
+-- Keep templates separate so every layer sees the same page context and
+-- rendered child HTML is never parsed as another template.
+newtype Layout = Layout [Template] deriving (Show)
 
 readLayout :: FilePath -> IO Layout
-readLayout = TIO.readFile >=> (return . Layout . Tpl.template)
+readLayout path = do
+  source <- TIO.readFile path
+  either (ioError . userError . show) (pure . Layout . pure) $
+    compileTemplate path source
 
-toLayout :: Text -> Layout
-toLayout = Layout . Tpl.template
+toLayout :: Text -> Either String Layout
+toLayout source =
+  either (Left . show) (Right . Layout . pure) $ compileTemplate "layout" source
 
-applyLayout :: Layout -> (Text -> Text) -> Text
-applyLayout (Layout tpl) = TL.toStrict . Tpl.render tpl
-
-composeLayouts :: Layout -> Layout -> Layout
-composeLayouts outer (Layout innerTpl) = toLayout $ applyLayout outer ctx
+applyLayout :: Layout -> HashMap Text Text -> Text
+applyLayout (Layout templates) context = foldr render child templates
  where
-  ctx "child" = Tpl.showTemplate innerTpl
-  ctx _ = ""
+  child = HM.lookupDefault "" "child" context
+  render tpl content = substitute tpl (HM.insert "child" content context)
 
 instance Semigroup Layout where
-  (<>) = composeLayouts
+  Layout outer <> Layout inner = Layout (outer ++ inner)
 
 type LayoutCache = HashMap (Path Rel Dir) (Maybe Layout)
 

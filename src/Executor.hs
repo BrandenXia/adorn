@@ -7,7 +7,7 @@
 module Executor (executeTasks, ExecutorCfg (..)) where
 
 import Control.Applicative ((<|>))
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, displayException, try)
 import Control.Monad (guard, join, unless, void)
 import Control.Monad.Extra (allM, whenMaybe)
 import Control.Monad.Reader
@@ -23,6 +23,7 @@ import qualified Data.Text.IO as TIO
 import GHC.IO.Exception (ExitCode (..))
 import Path
 import System.Directory (copyFile, createDirectoryIfMissing)
+import System.IO (hPutStrLn, stderr)
 import System.Process.Extra (readProcessWithExitCode)
 import Text.HTML.TagSoup (innerText, parseTags, renderTags)
 
@@ -62,14 +63,14 @@ executeTask = fmap isJust . runMaybeT . execute
         tryIO $ ensureParentExists compileTarget
         compile source compileTarget ["-f", "html", "--features", "html"]
 
-        template <- liftIO $ traverse (readLayout . toFilePath) template
+        template <- tryIO $ traverse (readLayout . toFilePath) template
 
         layoutDir <- asks layoutDir
         layouts <- asks layouts
         parentLayout <- do
           cache <- gets layoutCache
           (result, newCache) <-
-            lift $ runStateT (getLayout layoutDir layouts (parent relative)) cache
+            tryIO $ runStateT (getLayout layoutDir layouts (parent relative)) cache
           modify' $ \s -> s{layoutCache = newCache}
           pure result
 
@@ -80,9 +81,8 @@ executeTask = fmap isJust . runMaybeT . execute
             css = extractTag "style" tags
             body = extractTag "body" tags
             title = innerText $ parseTags $ extractTag "title" tags
-        let applied = applyLayout layout $ \case
-              "child" -> body
-              _ -> ""
+        let context = HM.fromList $ ("child", body) : [("title", title) | not (T.null title)]
+            applied = applyLayout layout context
         let appended = appendStyle (parseTags applied) css
             titled = if T.null title then appended else setTitle appended title
         tryIO $ TIO.writeFile (toFilePath target) (renderTags titled)
@@ -90,7 +90,11 @@ executeTask = fmap isJust . runMaybeT . execute
   tryIO :: (MonadIO m) => IO a -> MaybeT m a
   tryIO action = MaybeT $ do
     result <- liftIO $ try @IOException action
-    pure $ either (const Nothing) Just result
+    case result of
+      Left err -> do
+        liftIO $ hPutStrLn stderr (displayException err)
+        pure Nothing
+      Right value -> pure (Just value)
 
   ensureParentExists path = createDirectoryIfMissing True $ toFilePath $ parent path
 
