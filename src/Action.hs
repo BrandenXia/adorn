@@ -19,6 +19,7 @@ data Action status
   | Index {indexTemplate :: ActionFilePath status File, selection :: String}
   | TypstPDF
   | Copy
+  | Compose
   | Ignore
 
 deriving instance (Show (ActionFilePath status File)) => Show (Action status)
@@ -36,6 +37,7 @@ resolveAction cwd (Index template selection) =
   Index (resolveFilePath cwd template) selection
 resolveAction _ TypstPDF = TypstPDF
 resolveAction _ Copy = Copy
+resolveAction _ Compose = Compose
 resolveAction _ Ignore = Ignore
 
 resolveFilePath :: Path Abs Dir -> SomeBase File -> Path Abs File

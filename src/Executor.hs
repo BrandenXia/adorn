@@ -62,6 +62,14 @@ executeTask = fmap isJust . runMaybeT . execute
     case action of
       Ignore -> pure ()
       Copy -> tryIO $ copyFile (toFilePath source) (toFilePath target)
+      Compose -> do
+        layout <- loadParentLayout relative
+        case layout of
+          Nothing -> tryIO $ copyFile (toFilePath source) (toFilePath target)
+          Just layout -> do
+            content <- tryIO $ TIO.readFile $ toFilePath source
+            let composed = applyLayout layout $ HM.singleton "child" content
+            tryIO $ TIO.writeFile (toFilePath target) composed
       TypstPDF -> compile source target ["-f", "pdf"]
       Index{..} -> do
         template <- tryIO $ readLayout $ toFilePath indexTemplate

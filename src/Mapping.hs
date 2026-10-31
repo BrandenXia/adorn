@@ -97,6 +97,7 @@ pAction =
           )
     , keyword "typstPDF" $> TypstPDF
     , keyword "copy" $> Copy
+    , keyword "compose" $> Compose
     , keyword "ignore" $> Ignore
     , pIndexAction
     ]
