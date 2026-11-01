@@ -2,7 +2,7 @@
 
 Minimal static site generation with Typst and Mustache.
 
-```text
+```haskell
 articles/(.*)\.typ => typst template=article.mustache => articles/$1.html
 fragments/(.*)\.typ => typst bodyOnly=true => fragments/$1.html
 papers/(.*)\.typ => typstPDF => papers/$1.pdf
