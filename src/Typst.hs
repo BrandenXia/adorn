@@ -1,11 +1,13 @@
-module Typst (compileTypst, readDependencies) where
+module Typst (compileTypst, readDependencies, queryDependencies) where
 
 import Control.Monad (when)
-import Control.Monad.Except (ExceptT)
+import Control.Monad.Except (ExceptT, liftEither, runExceptT)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Path
 import System.Directory (canonicalizePath)
+import System.IO.Extra (withTempDir)
+import qualified System.FilePath as FP
 import System.Exit (ExitCode (..))
 import System.Process.Extra (readProcessWithExitCode)
 
@@ -32,3 +34,12 @@ readDependencies :: FilePath -> ExceptT BuildError IO [FilePath]
 readDependencies path = do
   contents <- buildIO "read Typst dependencies" (Just path) $ TIO.readFile path
   pure $ map T.unpack $ filter (not . T.null) $ T.splitOn (T.singleton '\0') contents
+
+queryDependencies :: Path Abs File -> [String] -> ExceptT BuildError IO [FilePath]
+queryDependencies source flags = do
+  result <- buildIO "query Typst dependencies" (Just $ toFilePath source) $
+    withTempDir $ \directory -> runExceptT $ do
+      let deps = directory FP.</> "dependencies"
+      compileTypst source (directory FP.</> "output") flags deps
+      readDependencies deps
+  liftEither result

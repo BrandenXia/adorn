@@ -26,6 +26,7 @@ data Adorn = Adorn
   , base :: String
   , layout :: String
   , full :: Bool
+  , deps :: Bool
   }
   deriving (Show, Data, Typeable)
 
@@ -39,6 +40,7 @@ adorn =
     , base = "." &= help "Base dir" &= typDir
     , layout = "layout" &= help "Layout dir" &= typDir
     , full = False &= help "Full build (ignore timestamps)"
+    , deps = False &= help "List input dependencies and exit (evaluates scripts and Typst)"
     }
     &= summary ("Adorn v" ++ showVersion version ++ ", (C) Branden Xia 2026")
 
@@ -76,11 +78,13 @@ runBuild Adorn{..} = do
         , layoutSet = layouts
         , mappings = rules
         }
-  plan <- buildPlan cfg full
+  plan <- buildPlan cfg (full || deps)
   when (requiresTypst plan) $ do
     executable <- buildIO "find Typst" Nothing $ findExecutable "typst"
     when (isNothing executable) $ failBuild "check build tools" Nothing "Required tool `typst` is not installed or not in PATH."
-  executePlan plan
+  if deps
+    then readPlanDependencies plan >>= buildIO "list dependencies" Nothing . putStr . unlines
+    else executePlan plan
  where
   resolveDir :: FilePath -> ExceptT BuildError IO (Path Abs Dir)
   resolveDir path = do

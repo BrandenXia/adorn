@@ -1,10 +1,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 
-module Plan (PlanCfg (..), BuildPlan, buildPlan, pendingTasks, planTasks, planBuildDir, planOutputDir, planMappingFile, planChoices, planProtected, requiresTypst) where
+module Plan (PlanCfg (..), BuildPlan, buildPlan, pendingTasks, planTasks, planBuildDir, planOutputDir, planMappingFile, planChoices, planProtected, readPlanDependencies, requiresTypst) where
 
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Control.Monad.Except (ExceptT, liftEither)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Writer.Strict (WriterT, runWriterT, tell)
 import Control.Monad.Extra (anyM)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Array (Array, bounds, inRange, (!))
@@ -25,7 +27,7 @@ import Layout (LayoutSet, getFileLayout, toLayoutFile)
 import Mapping (Mapping (..))
 import Script (runScript)
 import Task
-import Typst (readDependencies)
+import Typst (readDependencies, queryDependencies)
 
 data PlanCfg = PlanCfg
   { workingDir :: Path Abs Dir
@@ -46,10 +48,21 @@ data BuildPlan = BuildPlan
   , planMappingFile :: Path Abs File
   , planChoices :: [(Path Abs File, Maybe (Path Abs File))]
   , planProtected :: [Path Abs File]
+  , planDependencies :: [Path Abs File]
   }
 
 requiresTypst :: BuildPlan -> Bool
 requiresTypst = any taskNeedsTypst . pendingTasks
+
+readPlanDependencies :: BuildPlan -> ExceptT BuildError IO [FilePath]
+readPlanDependencies plan = do
+  imported <- concat <$> forM (planTasks plan) (\task -> case operation task of
+    CompileHtml source _ -> queryDependencies source ["-f", "html", "--features", "html"]
+    CompilePdf source -> queryDependencies source ["-f", "pdf"]
+    _ -> pure [])
+  paths <- buildIO "resolve dependencies" Nothing $
+    mapM canonicalizePath $ map toFilePath (planDependencies plan) ++ imported
+  pure $ sort $ nub paths
 
 buildPlan :: PlanCfg -> Bool -> ExceptT BuildError IO BuildPlan
 buildPlan cfg@PlanCfg{..} full = do
@@ -57,12 +70,13 @@ buildPlan cfg@PlanCfg{..} full = do
     failBuild "configure source discovery" (Just $ toFilePath sourceDir)
       "The source directory must differ from the output and build directories."
   files <- discoverSources cfg
-  (candidates, choices) <- discoverTasks cfg files
+  ((candidates, choices), scripts) <- runWriterT $ discoverTasks cfg files
   validateTasks candidates
   tasks <- if full then pure candidates else filterM (taskNecessary buildDir) candidates
   let (indexes, regular) = partition taskIsIndex tasks
+      dependencies = nub $ mappingFile : scripts ++ concatMap taskDeps candidates
   pure $ BuildPlan (regular ++ indexes) candidates buildDir outputDir mappingFile choices
-    (nub $ files ++ map target candidates ++ concatMap taskDeps candidates)
+    (nub $ files ++ map target candidates ++ dependencies) dependencies
 
 discoverSources :: PlanCfg -> ExceptT BuildError IO [Path Abs File]
 discoverSources PlanCfg{..} = walk [] sourceDir
@@ -86,7 +100,7 @@ discoverSources PlanCfg{..} = walk [] sourceDir
           then (: []) <$> buildIO "resolve source file" (Just path) (parseAbsFile path)
           else pure []
 
-discoverTasks :: PlanCfg -> [Path Abs File] -> ExceptT BuildError IO ([Task], [(Path Abs File, Maybe (Path Abs File))])
+discoverTasks :: PlanCfg -> [Path Abs File] -> WriterT [Path Abs File] (ExceptT BuildError IO) ([Task], [(Path Abs File, Maybe (Path Abs File))])
 discoverTasks cfg@PlanCfg{..} files = do
   discovered <- mapM discoverFile files
   let fileTasks = mapMaybe fst discovered
@@ -120,7 +134,8 @@ discoverTasks cfg@PlanCfg{..} files = do
 
   select source groups origin context scripts act dst = case act of
     Choose mode script branches -> do
-      (name, nextContext) <- runScript mode script source context
+      tell [source, script]
+      (name, nextContext) <- lift $ runScript mode script source context
       case lookup name branches of
         Just (next, route) -> select source groups origin nextContext (script : scripts) next route
         Nothing -> failBuild "select branch" (Just origin) $
