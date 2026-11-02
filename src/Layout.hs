@@ -11,12 +11,18 @@ import qualified Data.HashMap.Strict as HM
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Text.Mustache (Template, ToMustache, compileTemplate, substitute, toMustache)
-import Text.Mustache.Types (Value (String))
+import Text.Mustache.Types (Value (String, Object))
+import Text.HTML.TagSoup (Tag (TagText), innerText)
+import Text.HTML.TagSoup.Tree (TagTree (TagBranch, TagLeaf), flattenTree)
+
 import Path
 import System.Directory (doesDirectoryExist)
 import System.Directory.Extra (listFilesRecursive)
+
+import Html (HtmlDocument (..), parseDocument, renderDocument, documentBody, mergeHead)
 
 layoutNames :: [Path Rel File]
 layoutNames = [[relfile|layout.html|], [relfile|layout.mustache|]]
@@ -44,14 +50,26 @@ readLayout path = do
     compileTemplate path source
 
 applyLayout :: (ToMustache value) => Maybe Layout -> HashMap Text value -> Text
-applyLayout layout context = foldr render child templates
+applyLayout layout context
+  | null templates = child
+  | otherwise = renderDocument $ foldr render initial templates
  where
   Layout templates = fromMaybe mempty layout
   values = HM.map toMustache context
   child = case HM.lookup "child" values of
     Just (String content) -> content
     _ -> ""
-  render tpl content = substitute tpl (HM.insert "child" (toMustache content) values)
+  parsed = parseDocument child
+  initial = case HM.lookup "meta" values of
+    Just (Object meta) | Just (String title) <- HM.lookup "title" meta ->
+      parsed{documentHead = mergeHead (documentHead parsed) [TagBranch "title" [] [TagLeaf $ TagText title]]}
+    _ -> parsed
+  render tpl inner =
+    let title = innerText $ flattenTree [node | node@(TagBranch "title" _ _) <- documentHead inner]
+        variables = HM.insert "child" (toMustache $ documentBody inner) values
+        titled = if T.null title then variables else HM.insert "title" (toMustache title) variables
+        outer = parseDocument $ substitute tpl titled
+     in outer{documentHead = mergeHead (documentHead outer) (documentHead inner)}
 
 instance Semigroup Layout where
   Layout outer <> Layout inner = Layout (outer ++ inner)

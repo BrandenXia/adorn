@@ -18,7 +18,7 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, remo
 
 import BuildError
 import Cleanup (finishChoices)
-import Html (HtmlDocument (documentBody), parseDocument, renderDocument)
+import Html (documentBody, parseDocument)
 import Index (indexContext)
 import Layout (Layout, applyLayout, readLayout)
 import Plan (BuildPlan, pendingTasks, planTasks, planBuildDir, planOutputDir, planMappingFile, planChoices, planProtected)
@@ -61,9 +61,8 @@ executeTask buildDir task@Task{..} = forTarget (toFilePath target) $ do
       lift $ compileTypst source html ["-f", "html", "--features", "html"] deps
       content <- buildIO "read compiled HTML" (Just html) $ TIO.readFile html
       let document = parseDocument content
-      if bodyOnly then write $ documentBody document else do
-        layout <- loadLayouts taskLayouts
-        write $ renderDocument taskContext layout document
+      if bodyOnly then write $ documentBody document
+        else compose $ HM.singleton "child" $ toMustache content
     GenerateIndex entries -> do
       context <- buildIO "read index entries" Nothing $ indexContext relative entries
       compose context

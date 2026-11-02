@@ -1,76 +1,75 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Html (HtmlDocument (..), parseDocument, renderDocument, documentTitle) where
+module Html (HtmlDocument (..), parseDocument, renderDocument, documentBody, documentTitle, mergeHead) where
 
-import qualified Data.Aeson as A
-import qualified Data.Aeson.KeyMap as KM
-import Text.Mustache (toMustache)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.HashMap.Strict as HM
 import Text.HTML.TagSoup
-
-import Layout (Layout, applyLayout)
+import Text.HTML.TagSoup.Tree
 
 data HtmlDocument = HtmlDocument
   { documentSource :: Text
-  , documentBody :: Text
-  , documentCss :: Text
-  , documentName :: Text
+  , documentHead :: [TagTree Text]
+  , documentShell :: [TagTree Text]
   }
 
 parseDocument :: Text -> HtmlDocument
-parseDocument source =
-  let tags = parseTags source
-   in HtmlDocument source (extractTag "body" tags) (extractTag "style" tags) (titleFromTags tags)
+parseDocument source = HtmlDocument source (concatMap heads shell) shell
+ where
+  shell = tagTree $ canonicalizeTags $ parseTags source
+  heads (TagBranch "head" _ children) = children
+  heads (TagBranch "html" _ children) = concatMap heads children
+  heads _ = []
+
+documentBody :: HtmlDocument -> Text
+documentBody doc
+  | not $ any wrapper $ documentShell doc = documentSource doc
+  | otherwise = renderTree $ concatMap body $ documentShell doc
+ where
+  wrapper (TagBranch name _ _) = name `elem` ["html", "head", "body"]
+  wrapper (TagLeaf (TagOpen name _)) = T.toLower name == "!doctype"
+  wrapper _ = False
+  body (TagBranch "html" _ children) = concatMap body children
+  body (TagBranch "body" _ children) = children
+  body (TagBranch "head" _ _) = []
+  body (TagLeaf (TagOpen name _)) | T.toLower name == "!doctype" = []
+  body node = [node]
 
 documentTitle :: Text -> Text
-documentTitle = titleFromTags . parseTags
+documentTitle = innerText . takeWhile (/= TagClose "title") . drop 1
+  . dropWhile (not . isTagOpenName "title") . canonicalizeTags . parseTags
 
-titleFromTags :: [Tag Text] -> Text
-titleFromTags = innerText . takeWhile (/= TagClose "title") . drop 1 . dropWhile (not . isTagOpenName "title")
-
-renderDocument :: A.Object -> Maybe Layout -> HtmlDocument -> Text
-renderDocument _ Nothing doc = documentSource doc
-renderDocument meta layout doc =
-  let title = case KM.lookup "title" meta of
-        Just (A.String value) -> value
-        _ -> documentName doc
-      context = HM.fromList $ [("meta", toMustache $ A.Object meta), ("child", toMustache $ documentBody doc)]
-        ++ [("title", toMustache title) | not (T.null title)]
-      styled = appendStyle (parseTags $ applyLayout layout context) (documentCss doc)
-      titled = if T.null title then styled else setTitle styled title
-   in renderTags titled
-
-extractTag :: Text -> [Tag Text] -> Text
-extractTag name tags =
-  let start = drop 1 $ dropWhile (~/= TagOpen name []) tags
-      content = takeWhile (~/= TagClose name) start
-   in renderTags content
-
-setTitle :: [Tag Text] -> Text -> [Tag Text]
-setTitle tags title =
-  case break (isTagOpenName "head") tags of
-    (before, openHead : rest) ->
-      case break (== TagClose "head") rest of
-        (headTags, closeHead : after) ->
-          before ++ [openHead] ++ removeTitles headTags ++ titleTags ++ (closeHead : after)
-        _ -> tags
-    _ -> tags
+mergeHead :: [TagTree Text] -> [TagTree Text] -> [TagTree Text]
+mergeHead outer inner = filter keep outer ++ inner
  where
-  titleTags = [TagOpen "title" [], TagText title, TagClose "title"]
-  removeTitles [] = []
-  removeTitles (tag : rest)
-    | isTagOpenName "title" tag =
-        removeTitles $ drop 1 $ dropWhile (/= TagClose "title") rest
-    | otherwise = tag : removeTitles rest
+  keys = mapMaybe key inner
+  keep node = maybe True (`notElem` keys) $ key node
+  key :: TagTree Text -> Maybe (Text, Text)
+  key (TagBranch "title" _ _) = Just ("title", "")
+  key (TagLeaf (TagOpen "meta" attrs)) = case lookup "name" attrs of
+    Just name -> Just ("name", T.toCaseFold name)
+    Nothing -> (,) "property" <$> lookup "property" attrs
+  key _ = Nothing
 
-appendStyle :: [Tag Text] -> Text -> [Tag Text]
-appendStyle tags css =
-  case break (== TagClose "style") tags of
-    (before, closeStyle : after) ->
-      before ++ [TagText ("\n" <> css)] ++ (closeStyle : after)
-    _ -> case break (== TagClose "head") tags of
-      (before, closeHead : after) ->
-        before ++ [TagOpen "style" [], TagText css, TagClose "style"] ++ (closeHead : after)
-      _ -> tags
+renderDocument :: HtmlDocument -> Text
+renderDocument (HtmlDocument source [] _) = source
+renderDocument (HtmlDocument _ headNodes shell) = renderTree $
+  case break isHtml shell of
+    (before, TagBranch name attrs children : after) ->
+      before ++ [TagBranch name attrs (insertHead children)] ++ after
+    _ -> insertHead shell
+ where
+  isHtml (TagBranch "html" _ _) = True
+  isHtml _ = False
+  isHead (TagBranch "head" _ _) = True
+  isHead _ = False
+  insertHead nodes = case break isHead nodes of
+    (before, TagBranch name attrs _ : after) ->
+      before ++ [TagBranch name attrs headNodes] ++ filter (not . isHead) after
+    _ -> let (before, after) = span prologue nodes
+          in before ++ [TagBranch "head" [] headNodes] ++ after
+  prologue (TagLeaf (TagText text)) = T.null $ T.strip text
+  prologue (TagLeaf (TagComment _)) = True
+  prologue (TagLeaf (TagOpen name _)) = T.isPrefixOf "!" name || T.isPrefixOf "?" name
+  prologue _ = False

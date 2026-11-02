@@ -55,7 +55,7 @@ taskIsIndex task = case operation task of
   _ -> False
 
 taskSignature :: Task -> Text
-taskSignature = T.pack . show
+taskSignature = T.pack . ("head-composition-v1\n" ++) . show
 
 taskCacheDir :: Path Abs Dir -> Task -> FilePath
 taskCacheDir buildDir task = toFilePath (buildDir </> [reldir|.adorn/tasks|] </> relative task)
