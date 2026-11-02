@@ -1,8 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Layout (toLayoutFile, LayoutSet, listLayouts, Layout, readLayout, applyLayout, getFileLayout) where
+module Layout (LayoutSet, listLayouts, Layout, readLayout, applyLayout, getFileLayout) where
 
+import Control.Monad (forM_, when)
+import Data.List (sort)
 import Data.Maybe (fromMaybe)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
@@ -16,18 +18,22 @@ import Path
 import System.Directory (doesDirectoryExist)
 import System.Directory.Extra (listFilesRecursive)
 
-toLayoutFile :: Path Rel Dir -> Path Rel File
-toLayoutFile dir = dir </> [relfile|layout.html|]
+layoutNames :: [Path Rel File]
+layoutNames = [[relfile|layout.html|], [relfile|layout.mustache|]]
 
-type LayoutSet = HashSet (Path Rel Dir)
+type LayoutSet = HashSet (Path Rel File)
 
 listLayouts :: Path Abs Dir -> IO LayoutSet
 listLayouts layoutDir = do
   exists <- doesDirectoryExist (toFilePath layoutDir)
   files <- if exists then listFilesRecursive (toFilePath layoutDir) else pure []
   paths <- mapM parseAbsFile files
-  let layouts = filter ((== [relfile|layout.html|]) . filename) paths
-  HS.fromList . map parent <$> mapM (stripProperPrefix layoutDir) layouts
+  layouts <- mapM (stripProperPrefix layoutDir) $ filter ((`elem` layoutNames) . filename) paths
+  let directories = HM.fromListWith (++) [(parent path, [path]) | path <- layouts]
+  forM_ (sort $ HM.toList directories) $ \(dir, matches) -> when (length matches > 1) $
+    ioError $ userError $ "Ambiguous layout in " ++ toFilePath (layoutDir </> dir)
+      ++ "; keep only one of layout.html and layout.mustache."
+  pure $ HS.fromList layouts
 
 newtype Layout = Layout [Template] deriving (Show)
 
@@ -53,8 +59,9 @@ instance Semigroup Layout where
 instance Monoid Layout where
   mempty = Layout []
 
-getFileLayout :: LayoutSet -> Path Rel File -> [Path Rel Dir]
-getFileLayout set relFile = filter (`HS.member` set) $ getPossibleLayouts relFile
+getFileLayout :: LayoutSet -> Path Rel File -> [Path Rel File]
+getFileLayout set relFile =
+  [path | dir <- getPossibleLayouts relFile, name <- layoutNames, let path = dir </> name, HS.member path set]
 
 getPossibleLayouts :: Path Rel File -> [Path Rel Dir]
 getPossibleLayouts = reverse . go . parent

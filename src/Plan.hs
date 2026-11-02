@@ -23,7 +23,7 @@ import Text.Regex.TDFA (matchOnceText)
 
 import Action
 import BuildError
-import Layout (LayoutSet, getFileLayout, toLayoutFile)
+import Layout (LayoutSet, getFileLayout)
 import Mapping (Mapping (..))
 import Script (runScript)
 import Task
@@ -175,7 +175,7 @@ indexTask cfg origin inputs rel IndexSpec{..} =
   (makeTask cfg origin inputs rel (GenerateIndex []) (parentLayouts cfg rel ++ [indexTemplate]), Just selection)
 
 parentLayouts :: PlanCfg -> Path Rel File -> [Path Abs File]
-parentLayouts PlanCfg{..} rel = map ((layoutRoot </>) . toLayoutFile) $ getFileLayout layoutSet rel
+parentLayouts PlanCfg{..} rel = map (layoutRoot </>) $ getFileLayout layoutSet rel
 
 makeTask :: PlanCfg -> String -> [Path Abs File] -> Path Rel File -> Operation -> [Path Abs File] -> Task
 makeTask PlanCfg{..} origin inputs rel op layouts =
