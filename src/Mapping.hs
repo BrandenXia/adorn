@@ -24,6 +24,7 @@ import Text.Regex.TDFA (Regex, RegexMaker (makeRegexM))
 
 import Action
 import Script (ScriptMode (..))
+import Query (Query (..), defaultQuery, parsePredicate, validateField)
 
 data Mapping = Mapping
   { srcPat :: Regex
@@ -69,18 +70,58 @@ someFile = do
     Nothing -> fail ("Invalid template file path: " ++ raw)
     Just path -> pure path
 
+someSelection :: Bool -> Parser Selection
+someSelection nested = do
+  start <- getOffset
+  raw <- (T.pack <$> (char '"' *> manyTill L.charLiteral (char '"')))
+    <|> takeWhile1P (Just "selection regex") (\c -> not (isSpace c) && (not nested || c /= ';'))
+  maybe (setOffset start *> fail "Invalid selection regex") pure $ compileSelection (T.unpack raw)
+
 pIndexSpec :: Parser (IndexSpec Unresolved)
-pIndexSpec =
-  keyword "index" *> runPermutation
-    ( IndexSpec
-        <$> requiredParam "template" someFile
-        <*> requiredParam "selection" someSelection
-    )
+pIndexSpec = do
+  void $ keyword "index"
+  (indexFile, legacy) <- runPermutation $ (,)
+    <$> requiredParam "template" someFile
+    <*> optionalParam "selection" (someSelection False)
+  named <- optional $ do
+    void $ try $ blockSpace *> char '{'
+    blockSpace
+    selections <- namedSelection `sepEndBy1` (char ';' *> blockSpace)
+    void $ char '}'
+    let names = map fst selections
+    when (length names /= length (nub names)) $ fail "Duplicate index selection name"
+    when (any (`elem` ["meta", "child", "title"]) names) $ fail "Reserved index selection name"
+    pure selections
+  selections <- case (legacy, named) of
+    (Just selected, Nothing) -> pure [("entries", IndexSelection selected defaultQuery)]
+    (Nothing, Just selections) -> pure selections
+    _ -> fail "An index requires either selection=... or a named selection block"
+  pure $ IndexSpec indexFile selections
  where
-  someSelection = do
-    start <- getOffset
-    raw <- takeWhile1P (Just "selection regex") (not . isSpace)
-    maybe (setOffset start *> fail "Invalid selection regex") pure $ compileSelection (T.unpack raw)
+  namedSelection = do
+    name <- T.pack <$> some (alphaNumChar <|> oneOf ['_', '-'])
+    sc
+    void $ char ':'
+    blockSpace
+    let parameter key parser = param key parser <* blockSpace
+        required key = toPermutation . parameter key
+        optionalValue key parser = toPermutationWithDefault Nothing (Just <$> parameter key parser)
+        sortField = do
+          field <- takeWhile1P (Just "sort field") (\c -> not (isSpace c) && c `notElem` [';', '}'])
+          either fail pure $ validateField field
+        direction = (keyword "asc" $> False) <|> (keyword "desc" $> True)
+        limit = do
+          n <- L.decimal :: Parser Integer
+          when (n > toInteger (maxBound :: Int)) $ fail "Index limit is too large"
+          pure $ fromInteger n
+    (selected, predicate, field, descending, entryLimit) <- runPermutation $ (,,,,)
+      <$> required "selection" (someSelection True)
+      <*> optionalValue "filter" (someString >>= either fail pure . parsePredicate)
+      <*> optionalValue "sort" sortField
+      <*> optionalValue "order" direction
+      <*> optionalValue "limit" limit
+    when (descending /= Nothing && field == Nothing) $ fail "order requires sort"
+    pure (name, IndexSelection selected $ Query predicate field (descending == Just True) entryLimit)
 
 pAction :: Parser (Action Unresolved)
 pAction =

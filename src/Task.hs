@@ -6,6 +6,7 @@ import Data.Aeson (Object)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Path
+import Query (Query)
 import qualified System.FilePath as FP
 
 data Task = Task
@@ -24,7 +25,7 @@ data Operation
   | ComposeFile (Path Abs File)
   | CompileHtml (Path Abs File) Bool
   | CompilePdf (Path Abs File)
-  | GenerateIndex [IndexEntry]
+  | GenerateIndex [(Text, Query, [IndexEntry])]
   deriving (Show, Eq)
 
 data IndexEntry = IndexEntry

@@ -20,6 +20,7 @@ executable adorn
       Task
       Html
       Index
+      Query
       Layout
       Typst
 

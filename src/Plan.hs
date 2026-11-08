@@ -14,6 +14,7 @@ import Data.Char (isDigit)
 import qualified Data.HashMap.Strict as HM
 import Data.List (nub, partition, sort, sortOn)
 import Data.Maybe (catMaybes, mapMaybe, maybeToList)
+import Data.Text (Text)
 import qualified Data.Text.IO as TIO
 import Path
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, getModificationTime, listDirectory)
@@ -115,8 +116,9 @@ discoverTasks cfg@PlanCfg{..} files = do
         , Just rel <- [stripProperPrefix sourceDir source]
         ]
       attach (task, Nothing) = task
-      attach (task, Just selection) = task{operation = GenerateIndex $
-        filter (matchesSelection selection . toFilePath . entrySource) entries}
+      attach (task, Just selections) = task{operation = GenerateIndex
+        [(name, selectionQuery spec, filter (matchesSelection (selection spec) . toFilePath . entrySource) entries)
+        | (name, spec) <- selections]}
   pure (map attach tasks, choices)
  where
   discoverFile source = case stripProperPrefix sourceDir source of
@@ -175,9 +177,9 @@ destination origin raw = case parseRelFile raw of
   Nothing -> Left $ BuildError "resolve destination" (Just origin) Nothing $
     "Invalid output path " ++ show raw ++ "; expected a file path inside the output directory."
 
-indexTask :: PlanCfg -> String -> [Path Abs File] -> Path Rel File -> IndexSpec Resolved -> (Task, Maybe Selection)
+indexTask :: PlanCfg -> String -> [Path Abs File] -> Path Rel File -> IndexSpec Resolved -> (Task, Maybe [(Text, IndexSelection)])
 indexTask cfg origin inputs rel IndexSpec{..} =
-  (makeTask cfg origin inputs rel (GenerateIndex []) (parentLayouts cfg rel ++ [indexTemplate]), Just selection)
+  (makeTask cfg origin inputs rel (GenerateIndex []) (parentLayouts cfg rel ++ [indexTemplate]), Just indexSelections)
 
 parentLayouts :: PlanCfg -> Path Rel File -> [Path Abs File]
 parentLayouts PlanCfg{..} rel = map (layoutRoot </>) $ getFileLayout layoutSet rel

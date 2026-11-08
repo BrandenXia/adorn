@@ -1,9 +1,10 @@
 {-# LANGUAGE TypeFamilies #-}
 
-module Action (Unresolved, Resolved, Action (..), IndexSpec (..), Selection, compileSelection, matchesSelection, resolveAction, resolveIndex) where
+module Action (Unresolved, Resolved, Action (..), IndexSpec (..), IndexSelection (..), Selection, compileSelection, matchesSelection, resolveAction, resolveIndex) where
 
 import Data.Text (Text)
 import Path
+import Query (Query)
 import Script (ScriptMode)
 import Text.Regex.TDFA (Regex, makeRegexM, matchTest)
 
@@ -25,7 +26,12 @@ data Action status
 
 data IndexSpec status = IndexSpec
   { indexTemplate :: ActionFilePath status File
-  , selection :: Selection
+  , indexSelections :: [(Text, IndexSelection)]
+  }
+
+data IndexSelection = IndexSelection
+  { selection :: Selection
+  , selectionQuery :: Query
   }
 
 newtype Selection = Selection Regex

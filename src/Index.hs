@@ -3,6 +3,8 @@
 
 module Index (indexContext, entryURL) where
 
+import Control.Monad (forM)
+import Data.Aeson (object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
@@ -15,17 +17,20 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Path
 import System.FilePath (dropTrailingPathSeparator, splitDirectories, takeBaseName, takeExtension)
-import Text.Mustache (object, toMustache, (~>))
+import Text.Mustache (toMustache)
 import Text.Mustache.Types (Value)
 import Text.Printf (printf)
 
 import Html (documentTitle)
 import Task (IndexEntry (..))
+import Query (Query, applyQuery)
 
-indexContext :: Path Rel File -> [IndexEntry] -> IO (HashMap Text Value)
-indexContext index entries = do
+indexContext :: Path Rel File -> [(Text, Query, [IndexEntry])] -> IO (HashMap Text Value)
+indexContext index selections = HM.fromList <$> forM selections (\(name, query, entries) -> do
   values <- mapM entryValue entries
-  pure $ HM.singleton "entries" (toMustache values)
+  selected <- either (ioError . userError . (("Index selection " ++ T.unpack name ++ ": ") ++)) pure $
+    applyQuery query values
+  pure (name, toMustache selected))
  where
   entryValue IndexEntry{..} = do
     title <-
@@ -36,11 +41,11 @@ indexContext index entries = do
           Just (A.String value) -> value
           _ -> if T.null title then T.pack (takeBaseName $ toFilePath entrySource) else title
     pure $ object
-      [ "meta" ~> A.Object entryContext
-      , "url" ~> entryURL index entryTarget
-      , "title" ~> label
-      , "source" ~> T.pack (toFilePath entrySource)
-      , "target" ~> T.pack (toFilePath entryTarget)
+      [ "meta" .= A.Object entryContext
+      , "url" .= entryURL index entryTarget
+      , "title" .= label
+      , "source" .= T.pack (toFilePath entrySource)
+      , "target" .= T.pack (toFilePath entryTarget)
       ]
 
 entryURL :: Path Rel File -> Path Rel File -> Text

@@ -21,5 +21,12 @@ docs/(.*)\.typ => check script=check-compatible.sh {
   no: typstPDF => docs/$1.pdf;
 }
 
-index template=index.mustache selection=articles/.* => index.html
+index template=articles.mustache selection=articles/.* => articles.html
+
+index template=index.mustache {
+  latest: selection=articles/.* sort=meta.date order=desc limit=5;
+  articles: selection=articles/.* filter="meta.draft != true" sort=meta.date order=desc;
+  math: selection=articles/.* filter="'math' in meta.tags" sort=title order=asc;
+  papers: selection=papers/.* sort=source;
+} => index.html
 ```
