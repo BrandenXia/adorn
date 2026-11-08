@@ -27,7 +27,7 @@ import Layout (LayoutSet, getFileLayout)
 import Mapping (Mapping (..))
 import Script (runScript)
 import Task
-import Typst (readDependencies, queryDependencies)
+import Typst (readDependencies, queryDependencies, queryMetadata)
 
 data PlanCfg = PlanCfg
   { workingDir :: Path Abs Dir
@@ -154,10 +154,15 @@ discoverTasks cfg@PlanCfg{..} files = do
    where
     destinationPath = liftEither $ destination origin $ substitute groups dst
     attach (task, selection) =
-      (task{taskContext = context, taskDeps = nub (scripts ++ taskDeps task)}, selection)
+      (task{taskContext = KM.union context (taskContext task), taskDeps = nub (scripts ++ taskDeps task)}, selection)
     file op layouts = do
       rel <- destinationPath
-      pure $ Just $ attach (makeTask cfg origin [source] rel op (layouts rel), Nothing)
+      metadata <- lift $ case op of
+        CompileHtml path _ -> queryMetadata path ["--target", "html", "--features", "html"]
+        CompilePdf path -> queryMetadata path ["--target", "paged"]
+        _ -> pure KM.empty
+      let task = (makeTask cfg origin [source] rel op (layouts rel)){taskContext = metadata}
+      pure $ Just $ attach (task, Nothing)
 
   discoverGenerated GeneratedMapping{..} = do
     targetRel <- liftEither $ destination mappingOrigin dstTpl

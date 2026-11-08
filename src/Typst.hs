@@ -1,6 +1,9 @@
-module Typst (compileTypst, readDependencies, queryDependencies) where
+module Typst (compileTypst, readDependencies, queryDependencies, queryMetadata) where
 
 import Control.Monad (when)
+import Data.Aeson (Object, eitherDecodeStrict')
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Text.Encoding as TE
 import Control.Monad.Except (ExceptT, liftEither, runExceptT)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -43,3 +46,21 @@ queryDependencies source flags = do
       compileTypst source (directory FP.</> "output") flags deps
       readDependencies deps
   liftEither result
+
+queryMetadata :: Path Abs File -> [String] -> ExceptT BuildError IO Object
+queryMetadata source flags = do
+  let path = toFilePath source
+  (code, stdout, stderr) <- buildIO "query Typst metadata" (Just path) $
+    readProcessWithExitCode "typst"
+      (["eval", "query(<adorn>).map(it => it.value)", "--in", path, "--format", "json"] ++ flags) ""
+  case code of
+    ExitFailure n -> failBuild "query Typst metadata" (Just path) $
+      "Exit code " ++ show n ++ "\n" ++ stderr ++ stdout
+    ExitSuccess -> do
+      values <- either (failBuild "decode Typst metadata" (Just path)) pure $
+        eitherDecodeStrict' $ TE.encodeUtf8 $ T.pack stdout
+      case values of
+        [] -> pure KM.empty
+        [metadata] -> pure metadata
+        _ -> failBuild "query Typst metadata" (Just path) $
+          "Expected at most one <adorn> metadata declaration; found " ++ show (length values) ++ "."
