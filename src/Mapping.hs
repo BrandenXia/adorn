@@ -208,7 +208,7 @@ pFileMapping :: Parser Mapping
 pFileMapping = do
   origin <- sourcePosPretty <$> getSourcePos
   start <- getOffset
-  src <- trim <$> manyTill anySingle (try (string "=>"))
+  src <- trim <$> manyTill (noneOf ['\r', '\n']) (try (string "=>"))
   when (null src) $ fail "src cannot be empty"
   pattern <- pRegexAt start src
   sc
@@ -221,7 +221,7 @@ pMappings =
  where
   pLine = do
     sc
-    result <- optional (notFollowedBy (char '#') *> pMapping)
+    result <- optional (notFollowedBy (void (char '#') <|> void eol) *> pMapping)
     sc
     void $ optional (L.skipLineComment "#")
     void eol <|> eof
