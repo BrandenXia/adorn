@@ -11,6 +11,7 @@ import Data.List (sortBy)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Time (Day, defaultTimeLocale, parseTimeM, toModifiedJulianDay)
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -21,6 +22,7 @@ data Query = Query
   , querySort :: Maybe Text
   , queryDescending :: Bool
   , queryLimit :: Maybe Int
+  , queryDateFormat :: Maybe String
   }
   deriving (Show, Eq)
 
@@ -28,7 +30,7 @@ data Operand = Field Text | Literal Value deriving (Show, Eq)
 data Predicate = Equal Operand Operand | NotEqual Operand Operand | Member Operand Operand deriving (Show, Eq)
 
 defaultQuery :: Query
-defaultQuery = Query Nothing Nothing False Nothing
+defaultQuery = Query Nothing Nothing False Nothing Nothing
 
 type Parser = Parsec Void Text
 
@@ -85,13 +87,23 @@ applyQuery query entries = do
   ordered <- case querySort query of
     Nothing -> pure filtered
     Just field -> do
-      let keyed = [(lookupField field entry, entry) | entry <- filtered]
-          kinds = [kind key | (key, _) <- keyed, key /= Null]
+      keyed <- mapM (\entry -> (\key -> (key, entry)) <$> sortKey field entry) filtered
+      let kinds = [kind key | (key, _) <- keyed, key /= Null]
       unless (all (/= 0) kinds && (null kinds || all (== head kinds) kinds)) $
         Left $ "Sort field " ++ show field ++ " must contain one scalar type (strings, numbers, or booleans)."
       pure $ map snd $ sortBy compareEntry keyed
   pure $ maybe ordered (`take` ordered) $ queryLimit query
  where
+  sortKey field entry = case (queryDateFormat query, lookupField field entry) of
+    (Nothing, value) -> Right value
+    (_, Null) -> Right Null
+    (Just format, String text) -> case parseTimeM True defaultTimeLocale format (T.unpack text) :: Maybe Day of
+      Just day -> Right $ Number $ fromInteger $ toModifiedJulianDay day
+      Nothing -> invalid field entry $ "does not match dateFormat=" ++ show format
+    (Just _, _) -> invalid field entry "must be a date string"
+  invalid field entry reason = Left $
+    "Sort field " ++ show field ++ " in " ++ show (lookupField "source" entry)
+      ++ " " ++ reason ++ ": " ++ show (lookupField field entry)
   kind (String _) = 1 :: Int
   kind (Number _) = 2
   kind (Bool _) = 3

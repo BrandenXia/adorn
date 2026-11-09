@@ -110,18 +110,25 @@ pIndexSpec = do
           field <- takeWhile1P (Just "sort field") (\c -> not (isSpace c) && c `notElem` [';', '}'])
           either fail pure $ validateField field
         direction = (keyword "asc" $> False) <|> (keyword "desc" $> True)
+        dateFormat = do
+          value <- (lookAhead (char '\"') *> someString)
+            <|> some (satisfy (\c -> not (isSpace c) && c `notElem` [';', '}']))
+          when (null value) $ fail "dateFormat cannot be empty"
+          pure value
         limit = do
           n <- L.decimal :: Parser Integer
           when (n > toInteger (maxBound :: Int)) $ fail "Index limit is too large"
           pure $ fromInteger n
-    (selected, predicate, field, descending, entryLimit) <- runPermutation $ (,,,,)
+    (selected, predicate, field, descending, entryLimit, format) <- runPermutation $ (,,,,,)
       <$> required "selection" (someSelection True)
       <*> optionalValue "filter" (someString >>= either fail pure . parsePredicate)
       <*> optionalValue "sort" sortField
       <*> optionalValue "order" direction
       <*> optionalValue "limit" limit
+      <*> optionalValue "dateFormat" dateFormat
     when (descending /= Nothing && field == Nothing) $ fail "order requires sort"
-    pure (name, IndexSelection selected $ Query predicate field (descending == Just True) entryLimit)
+    when (format /= Nothing && field == Nothing) $ fail "dateFormat requires sort"
+    pure (name, IndexSelection selected $ Query predicate field (descending == Just True) entryLimit format)
 
 pAction :: Parser (Action Unresolved)
 pAction =

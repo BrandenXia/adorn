@@ -24,8 +24,8 @@ docs/(.*)\.typ => check script=check-compatible.sh {
 index template=articles.mustache selection=articles/.* => articles.html
 
 index template=index.mustache {
-  latest: selection=articles/.* sort=meta.date order=desc limit=5;
-  articles: selection=articles/.* filter="meta.draft != true" sort=meta.date order=desc;
+  latest: selection=articles/.* sort=meta.date dateFormat="%b %e, %Y" order=desc limit=5;
+  articles: selection=articles/.* filter="meta.draft != true" sort=meta.date dateFormat="%b %e, %Y" order=desc;
   math: selection=articles/.* filter="'math' in meta.tags" sort=title order=asc;
   papers: selection=papers/.* sort=source;
 } => index.html

@@ -35,6 +35,7 @@ executable adorn
       path,
       directory,
       text,
+      time,
       megaparsec,
       parser-combinators,
       unordered-containers,
